@@ -258,6 +258,14 @@ The opt-in external test sends the bounded request `ghost-layer-external-test`. 
 
 This is an application-level controlled TCP exit, not a proxy or production VPN. TUN packets may reach this boundary only through the existing bounded packet, routing, encrypted session, and multi-hop forwarding layers. NAT, DNS interception, OS routing, default-route installation, UDP, transparent proxying, arbitrary destination forwarding, and unrestricted Internet access remain disabled.
 
+## Bounded NAT and Return Mapping
+
+Prompts 22-23 strengthen the existing in-memory NAT and return-path foundations without enabling NAT for ordinary traffic. `GHOST_NAT_ENABLED` remains `false` by default; when disabled, no NAT mapping is created and the existing controlled TCP/iPhone path is unchanged.
+
+Each controlled `NatMapping` binds the internal source and external destination to the session, source identity, Entry peer, Exit peer, and IP protocol. Translated source ports are allocated from a bounded deterministic range and are never reused while active. Mappings have bounded capacity, expiration, collision checks, and explicit session cleanup. Reverse lookup requires the complete expected flow binding; unknown, expired, cross-session, cross-route, cross-peer, and wrong-protocol returns are rejected.
+
+`ReturnPathTable` similarly binds each packet identity to the session, source identity, Entry peer, and Exit peer. Lookup requires the expected binding, entries expire, session cleanup removes active entries, and `consume` makes a successful return one-time so a replay is rejected. These tables are state-model boundaries for a future controlled packet flow; they do not open inbound listeners, create direct Exit-to-Client sockets, modify OS routing, enable DNS or UDP, or provide unrestricted Internet forwarding. Actual return traffic must continue through the existing authenticated encrypted Exit -> Entry -> Client channel and TUN bridge.
+
 ## VPN Networking Foundations
 
 Prompt 15 adds platform-independent models needed before a production data plane, without enabling those production behaviors. `PacketPipeline` applies the following bounded sequence:
