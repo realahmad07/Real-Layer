@@ -6,7 +6,7 @@ use std::time::Duration;
 #[test]
 fn opt_in_external_tcp_destination_round_trip() {
     let Ok(destination) = std::env::var("GHOST_EXTERNAL_TEST_DESTINATION") else {
-        println!("external TCP test skipped: GHOST_EXTERNAL_TEST_DESTINATION is not configured");
+        println!("EXTERNAL INTERNET TEST SKIPPED — NO AUTHORIZED DESTINATION CONFIGURED");
         return;
     };
     let allowlist = std::env::var("GHOST_ALLOWED_EXIT_DESTINATIONS")
@@ -37,8 +37,13 @@ fn opt_in_external_tcp_destination_round_trip() {
     let response = adapter
         .exchange(b"ghost-layer-external-test")
         .expect("external TCP test request/response");
-    let expected = std::env::var("GHOST_EXTERNAL_TEST_RESPONSE")
-        .unwrap_or_else(|_| "ghost-layer-external-test-ack".to_owned());
-    assert_eq!(response, expected.as_bytes());
+    if let Ok(expected) = std::env::var("GHOST_EXTERNAL_TEST_RESPONSE") {
+        assert_eq!(response, expected.as_bytes());
+    } else {
+        println!(
+            "authorized external TCP response received: {} bytes",
+            response.len()
+        );
+    }
     adapter.close().expect("close external TCP adapter");
 }

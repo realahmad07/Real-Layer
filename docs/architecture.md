@@ -248,11 +248,15 @@ local test server
 
 This adapter is a controlled test boundary, not a proxy. UDP, NAT, DNS, route installation, arbitrary sockets, unrestricted Internet forwarding, and production VPN behavior remain future work. The Exit Packet Handler and adapter intentionally have no capability to send traffic outside the explicit test allowlist. `GHOST_ALLOWED_EXIT_DESTINATIONS` configures literal `IP:PORT` entries and defaults to an empty list.
 
-## Controlled External TCP Test
+## Controlled External TCP Exit
 
-Prompt 16 adds an opt-in external connectivity proof without making normal tests depend on the public Internet. Set `GHOST_EXTERNAL_TEST_DESTINATION` to a literal IPv4/IPv6 `IP:PORT` and include the exact same value in `GHOST_ALLOWED_EXIT_DESTINATIONS`; configuration fails closed when it is absent from the allowlist. The opt-in test sends the bounded application request `ghost-layer-external-test` through the Exit TCP adapter and verifies the configured deterministic response. The existing localhost integration test remains the deterministic proof of the complete Client -> Entry -> Exit encrypted path.
+Prompts 16-19 provide an opt-in controlled external TCP exit without enabling unrestricted Internet forwarding. Set `GHOST_EXTERNAL_TEST_DESTINATION` to one literal IPv4/IPv6 `IP:PORT` and include that exact normalized value in `GHOST_ALLOWED_EXIT_DESTINATIONS`. Configuration fails closed when the destination is absent from the allowlist. Hostnames, wildcards, CIDR ranges, arbitrary ports, implicit DNS, and automatic destination discovery are rejected.
 
-With no external destination configured, the external test prints a skip message and normal `cargo test --workspace` remains offline-safe. The existing localhost multi-hop test is unchanged and remains deterministic. Hostnames, wildcard addresses, arbitrary user destinations, and fallback destinations are rejected. This is an application-level controlled TCP test only: NAT, DNS interception, OS routing, UDP, transparent proxying, and production Internet forwarding remain disabled.
+The Entry relay forwards the authenticated encrypted payload to the selected Exit relay. The Exit validates the session, route, Entry and Exit peers, relay session, forwarding state, duplicate identity, packet bounds, and MTU through `ExitPacketHandler`, then calls the existing `TcpExitNetworkAdapter` with the exact configured destination. The bounded TCP response returns through the same encrypted Exit -> Entry -> Client forwarding path. No direct return socket is created.
+
+The opt-in external test sends the bounded request `ghost-layer-external-test`. It requires an explicitly configured and allowlisted destination. If no destination is configured it reports `EXTERNAL INTERNET TEST SKIPPED — NO AUTHORIZED DESTINATION CONFIGURED`. If `GHOST_EXTERNAL_TEST_RESPONSE` is set, the received bytes must match it exactly; otherwise the test records the received byte count without assuming that an arbitrary TCP service echoes, speaks HTTP, or returns a fixed response. A connection or read failure is reported as an actual test failure. The Prompt 17A iPhone regression remains a separate real-runtime echo test at `192.168.1.3:9005`.
+
+This is an application-level controlled TCP exit, not a proxy or production VPN. TUN packets may reach this boundary only through the existing bounded packet, routing, encrypted session, and multi-hop forwarding layers. NAT, DNS interception, OS routing, default-route installation, UDP, transparent proxying, arbitrary destination forwarding, and unrestricted Internet access remain disabled.
 
 ## VPN Networking Foundations
 
