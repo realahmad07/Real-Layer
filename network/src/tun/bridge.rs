@@ -33,7 +33,7 @@ impl From<DataPlaneError> for TunPipelineError {
 
 impl<'channel, 'device, Device> TunDataPlane<'channel, 'device, Device>
 where
-    Device: TunDevice,
+    Device: TunDevice + ?Sized,
 {
     pub fn new(
         device: &'device mut Device,
@@ -76,7 +76,7 @@ where
     }
 }
 
-pub struct TunDataPlane<'channel, 'device, Device: TunDevice> {
+pub struct TunDataPlane<'channel, 'device, Device: TunDevice + ?Sized> {
     device: &'device mut Device,
     data_plane: &'device mut DataPlane<'channel>,
     maximum_packet_size: usize,

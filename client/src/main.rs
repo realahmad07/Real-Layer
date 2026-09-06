@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 use ghost_layer_network::{
     ConfiguredPeerDiscovery, DataPlane, DataPlaneEnvelope, DataPlaneMessageType, DiscoveryService,
-    EncryptedChannel, HandshakeResponse, NetworkEvent, NetworkNode, NodeConfig, NodeIdentity,
-    RouteBinding, SessionInitiator, CHANNEL_PROTOCOL_VERSION, DATA_PLANE_KIND,
-    DEFAULT_MAXIMUM_PAYLOAD_SIZE,
+    EncryptedChannel, HandshakeResponse, MtuPolicy, NetworkEvent, NetworkNode, NodeConfig,
+    NodeIdentity, PacketPipeline, RouteBinding, SessionInitiator, TunDataPlane,
+    CHANNEL_PROTOCOL_VERSION, DATA_PLANE_KIND, DEFAULT_MAXIMUM_PAYLOAD_SIZE,
 };
 use ghost_layer_relay::{
     CandidateRequirements, ForwardingMessage, RelayCandidate, RelayMetadataRequest, RelayRanking,
@@ -90,28 +90,67 @@ async fn main() -> Result<()> {
                                         .map_err(|error| {
                                             anyhow::anyhow!("open encrypted channel: {error}")
                                         })?;
-                                        let payload = if config.external_test_destination.is_some()
-                                            && matches!(route, RouteBinding::TwoHop { .. })
-                                        {
-                                            b"ghost-layer-external-test".as_slice()
+                                        let envelope = if let Some(device) = tun_device.as_mut() {
+                                            let mut data_plane = DataPlane::open(
+                                                &mut channel,
+                                                DEFAULT_MAXIMUM_PAYLOAD_SIZE,
+                                            )
+                                            .map_err(|error| {
+                                                anyhow::anyhow!("open TUN data plane: {error}")
+                                            })?;
+                                            let Some(packet) =
+                                                device.read_packet().map_err(|error| {
+                                                    anyhow::anyhow!("read TUN packet: {error}")
+                                                })?
+                                            else {
+                                                return Err(anyhow::anyhow!(
+                                                    "TUN device returned no packet for controlled bridge"
+                                                ));
+                                            };
+                                            let mut pipeline = PacketPipeline::new(
+                                                MtuPolicy::new(
+                                                    config.tun.mtu,
+                                                    config.tun.maximum_packet_size,
+                                                )
+                                                .map_err(|error| {
+                                                    anyhow::anyhow!(
+                                                        "configure TUN MTU policy: {error}"
+                                                    )
+                                                })?,
+                                                &mut data_plane,
+                                            );
+                                            pipeline.send(packet.as_bytes().to_vec()).map_err(
+                                                |error| {
+                                                    anyhow::anyhow!("route TUN packet: {error}")
+                                                },
+                                            )?
                                         } else {
-                                            b"hello ghost layer".as_slice()
-                                        };
-                                        let frame = DataPlane::open(
-                                            &mut channel,
-                                            DEFAULT_MAXIMUM_PAYLOAD_SIZE,
-                                        )
-                                        .map_err(|error| {
-                                            anyhow::anyhow!("open data plane: {error}")
-                                        })?
-                                        .send(payload)
-                                        .map_err(|error| {
-                                            anyhow::anyhow!("encrypt data-plane payload: {error}")
-                                        })?;
-                                        let envelope = DataPlaneEnvelope {
-                                            kind: DATA_PLANE_KIND.to_owned(),
-                                            session_id,
-                                            frame,
+                                            let payload =
+                                                if config.external_test_destination.is_some()
+                                                    && matches!(route, RouteBinding::TwoHop { .. })
+                                                {
+                                                    b"ghost-layer-external-test".as_slice()
+                                                } else {
+                                                    b"hello ghost layer".as_slice()
+                                                };
+                                            let frame = DataPlane::open(
+                                                &mut channel,
+                                                DEFAULT_MAXIMUM_PAYLOAD_SIZE,
+                                            )
+                                            .map_err(|error| {
+                                                anyhow::anyhow!("open data plane: {error}")
+                                            })?
+                                            .send(payload)
+                                            .map_err(|error| {
+                                                anyhow::anyhow!(
+                                                    "encrypt data-plane payload: {error}"
+                                                )
+                                            })?;
+                                            DataPlaneEnvelope {
+                                                kind: DATA_PLANE_KIND.to_owned(),
+                                                session_id,
+                                                frame,
+                                            }
                                         };
                                         node.request_discovery(
                                             peer,
@@ -139,6 +178,33 @@ async fn main() -> Result<()> {
                                     && forwarded.route == *route
                                     && forwarded.data.session_id == channel.session_id()
                                 {
+                                    if let Some(device) = tun_device.as_mut() {
+                                        let mut data_plane =
+                                            DataPlane::open(channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE)
+                                                .map_err(|error| {
+                                                    anyhow::anyhow!(
+                                                        "open TUN response data plane: {error}"
+                                                    )
+                                                })?;
+                                        TunDataPlane::new(
+                                            device.as_mut(),
+                                            &mut data_plane,
+                                            config.tun.maximum_packet_size,
+                                            config.tun.mtu,
+                                        )
+                                        .map_err(|error| {
+                                            anyhow::anyhow!("open TUN response bridge: {error}")
+                                        })?
+                                        .write_frame(&forwarded.data)
+                                        .map_err(
+                                            |error| anyhow::anyhow!("write packet to TUN: {error}"),
+                                        )?;
+                                        info!(session_id = %forwarded.client_session_id, "TUN packet returned through entry and exit");
+                                        channel.close().map_err(|error| {
+                                            anyhow::anyhow!("close encrypted channel: {error}")
+                                        })?;
+                                        break;
+                                    }
                                     match DataPlane::open(channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE)
                                         .and_then(|mut plane| plane.receive(&forwarded.data))
                                     {
