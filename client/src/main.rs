@@ -7,8 +7,8 @@ use ghost_layer_network::{
     DEFAULT_MAXIMUM_PAYLOAD_SIZE,
 };
 use ghost_layer_relay::{
-    CandidateRequirements, RelayCandidate, RelayMetadataRequest, RelayRanking, Route,
-    RouteSelectionPolicy, RouteSelector,
+    CandidateRequirements, ForwardingMessage, RelayCandidate, RelayMetadataRequest, RelayRanking,
+    Route, RouteSelectionPolicy, RouteSelector, FORWARDING_KIND,
 };
 use std::time::SystemTime;
 use tracing::{error, info, warn};
@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
     let mut candidates = Vec::new();
     let mut pending_session: Option<SessionInitiator> = None;
     let mut active_channel: Option<EncryptedChannel> = None;
+    let mut active_route: Option<RouteBinding> = None;
 
     info!(%peer_id, role = "client", "client identity loaded");
     if discovery.known_peers().is_empty() {
@@ -79,6 +80,7 @@ async fn main() -> Result<()> {
                                         info!(session_id = %session.session_id(), peer = %session.peer_id(), route = ?session.route(), "secure session established");
                                         let session_id = session.session_id();
                                         let peer = session.peer_id();
+                                        let route = session.route().clone();
                                         let mut channel = EncryptedChannel::open(
                                             session,
                                             CHANNEL_PROTOCOL_VERSION,
@@ -88,6 +90,13 @@ async fn main() -> Result<()> {
                                         .map_err(|error| {
                                             anyhow::anyhow!("open encrypted channel: {error}")
                                         })?;
+                                        let payload = if config.external_test_destination.is_some()
+                                            && matches!(route, RouteBinding::TwoHop { .. })
+                                        {
+                                            b"ghost-layer-external-test".as_slice()
+                                        } else {
+                                            b"hello ghost layer".as_slice()
+                                        };
                                         let frame = DataPlane::open(
                                             &mut channel,
                                             DEFAULT_MAXIMUM_PAYLOAD_SIZE,
@@ -95,7 +104,7 @@ async fn main() -> Result<()> {
                                         .map_err(|error| {
                                             anyhow::anyhow!("open data plane: {error}")
                                         })?
-                                        .send(b"hello ghost layer")
+                                        .send(payload)
                                         .map_err(|error| {
                                             anyhow::anyhow!("encrypt data-plane payload: {error}")
                                         })?;
@@ -109,11 +118,48 @@ async fn main() -> Result<()> {
                                             serde_json::to_vec(&envelope)?,
                                         );
                                         active_channel = Some(channel);
+                                        active_route = Some(route);
                                         info!(session_id = %session_id, "encrypted channel established; sending protocol Ping");
                                     }
                                     Err(error) => {
                                         warn!(peer_id = %remote_peer, ?error, "secure session establishment failed")
                                     }
+                                }
+                            }
+                        }
+                    } else if let Ok(forwarded) =
+                        serde_json::from_slice::<ForwardingMessage>(&payload)
+                    {
+                        if forwarded.kind == FORWARDING_KIND {
+                            if let (Some(channel), Some(route)) =
+                                (active_channel.as_mut(), active_route.as_ref())
+                            {
+                                if forwarded.client_session_id == channel.session_id()
+                                    && forwarded.client_peer == peer_id.to_string()
+                                    && forwarded.route == *route
+                                    && forwarded.data.session_id == channel.session_id()
+                                {
+                                    match DataPlane::open(channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE)
+                                        .and_then(|mut plane| plane.receive(&forwarded.data))
+                                    {
+                                        Ok(message)
+                                            if message.payload == b"ghost-layer-external-test" =>
+                                        {
+                                            info!(session_id = %forwarded.client_session_id, "external TCP echo received through entry and exit");
+                                            channel.close().map_err(|error| {
+                                                anyhow::anyhow!("close encrypted channel: {error}")
+                                            })?;
+                                            break;
+                                        }
+                                        Ok(message) => {
+                                            warn!(?message, "unexpected external TCP response")
+                                        }
+                                        Err(error) => {
+                                            warn!(?error, "rejected external TCP response")
+                                        }
+                                    }
+                                } else {
+                                    warn!("rejected forwarding response binding");
                                 }
                             }
                         }

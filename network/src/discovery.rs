@@ -7,6 +7,7 @@ use std::io;
 
 pub const RELAY_DISCOVERY_PROTOCOL: &str = "/ghost-layer/relay-discovery/1.0.0";
 pub type DiscoveryRequestId = request_response::OutboundRequestId;
+pub type DiscoveryResponseChannel = request_response::ResponseChannel<Vec<u8>>;
 
 pub trait DiscoveryService {
     fn known_peers(&self) -> &[Multiaddr];

@@ -31,6 +31,7 @@ pub struct ForwardingMessage {
     pub kind: String,
     pub forwarding_id: SessionId,
     pub client_session_id: SessionId,
+    pub client_peer: String,
     pub route: RouteBinding,
     pub data: DataPlaneEnvelope,
 }
@@ -99,6 +100,24 @@ impl ForwardingContext {
         exit_peer: PeerId,
         route: RouteBinding,
     ) -> Result<Self, ForwardingError> {
+        Self::with_forwarding_id(
+            SessionId::generate(),
+            client_session_id,
+            client_peer,
+            entry_peer,
+            exit_peer,
+            route,
+        )
+    }
+
+    pub fn with_forwarding_id(
+        forwarding_id: SessionId,
+        client_session_id: SessionId,
+        client_peer: PeerId,
+        entry_peer: PeerId,
+        exit_peer: PeerId,
+        route: RouteBinding,
+    ) -> Result<Self, ForwardingError> {
         match route {
             RouteBinding::TwoHop { entry, exit }
                 if entry == entry_peer && exit == exit_peer && entry != exit => {}
@@ -108,7 +127,7 @@ impl ForwardingContext {
             return Err(ForwardingError::InvalidRoute);
         }
         Ok(Self {
-            forwarding_id: SessionId::generate(),
+            forwarding_id,
             client_session_id,
             client_peer,
             entry_peer,
@@ -126,6 +145,10 @@ impl ForwardingContext {
 
     pub fn client_session_id(&self) -> SessionId {
         self.client_session_id
+    }
+
+    pub fn client_peer(&self) -> PeerId {
+        self.client_peer
     }
 
     pub fn entry_peer(&self) -> PeerId {
@@ -258,6 +281,7 @@ impl ForwardingContext {
         }
         if message.forwarding_id != self.forwarding_id
             || message.client_session_id != self.client_session_id
+            || message.client_peer.parse::<PeerId>().ok() != Some(self.client_peer)
             || message.route != self.route
         {
             return Err(ForwardingError::InvalidForwardingContext);
@@ -376,6 +400,7 @@ mod tests {
             kind: FORWARDING_KIND.to_owned(),
             forwarding_id: context.forwarding_id(),
             client_session_id: context.client_session_id(),
+            client_peer: context.client_peer().to_string(),
             route: context.route().clone(),
             data: DataPlaneEnvelope {
                 kind: ghost_layer_network::DATA_PLANE_KIND.to_owned(),

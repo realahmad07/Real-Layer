@@ -139,6 +139,35 @@ impl ExitPacketHandler {
             .ok_or(ExitPacketHandlerError::Shutdown)
     }
 
+    pub fn handle_bound_with_adapter_payload<A: ExitNetworkAdapter>(
+        &mut self,
+        packet_id: SessionId,
+        payload: &[u8],
+        context: &ForwardingContext,
+        binding: ExitForwardingBinding,
+        adapter: &mut A,
+    ) -> Result<Vec<u8>, ExitPacketHandlerError> {
+        self.ensure_open()?;
+        if context.state() != ForwardingState::Forwarding {
+            return Err(ExitPacketHandlerError::InvalidForwardingState);
+        }
+        context
+            .validate_entry(binding.entry_peer)
+            .map_err(map_context_error)?;
+        context
+            .validate_exit(binding.exit_peer)
+            .map_err(map_context_error)?;
+        context
+            .validate_relay_session(binding.relay_session_id)
+            .map_err(map_context_error)?;
+        if !self.handled_packets.insert(packet_id) {
+            return Err(ExitPacketHandlerError::DuplicatePacket);
+        }
+        adapter
+            .exchange(payload)
+            .map_err(ExitPacketHandlerError::Network)
+    }
+
     pub fn enqueue_response(
         &mut self,
         packet: NetworkPacket,

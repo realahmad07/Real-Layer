@@ -28,8 +28,8 @@ pub use data_plane::{
     DATA_PLANE_KIND, DATA_PLANE_PROTOCOL_VERSION, DEFAULT_MAXIMUM_PAYLOAD_SIZE,
 };
 pub use discovery::{
-    ConfiguredPeerDiscovery, DiscoveryRequestId, DiscoveryService, RelayDiscoveryCodec,
-    RelayDiscoveryProtocol,
+    ConfiguredPeerDiscovery, DiscoveryRequestId, DiscoveryResponseChannel, DiscoveryService,
+    RelayDiscoveryCodec, RelayDiscoveryProtocol,
 };
 pub use dns::{DnsError, DnsLimits, DnsResolver, MockDnsResolver};
 pub use error::ConfigError;

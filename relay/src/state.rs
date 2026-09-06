@@ -128,6 +128,7 @@ impl RelayState {
                 if self.active_peers.insert(*peer_id) {
                     self.total_successful_connections += 1;
                 }
+                self.status = RelayStatus::Online;
             }
             NetworkEvent::PeerDisconnected { peer_id } => {
                 self.active_peers.remove(peer_id);

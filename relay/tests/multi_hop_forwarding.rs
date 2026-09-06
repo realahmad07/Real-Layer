@@ -280,6 +280,7 @@ async fn client_entry_exit_forwards_controlled_data_plane_message() {
                                 kind: FORWARDING_KIND.to_owned(),
                                 forwarding_id: context.forwarding_id(),
                                 client_session_id: context.client_session_id(),
+                                client_peer: client_identity.peer_id().to_string(),
                                 route: context.route().clone(),
                                 data: DataPlaneEnvelope { kind: DATA_PLANE_KIND.to_owned(), session_id: relay_session_id, frame: relay_frame },
                             };
@@ -297,6 +298,7 @@ async fn client_entry_exit_forwards_controlled_data_plane_message() {
                                 kind: FORWARDING_KIND.to_owned(),
                                 forwarding_id: context.forwarding_id(),
                                 client_session_id: context.client_session_id(),
+                                client_peer: client_identity.peer_id().to_string(),
                                 route: context.route().clone(),
                                 data: DataPlaneEnvelope { kind: DATA_PLANE_KIND.to_owned(), session_id: client_session_id, frame: client_frame },
                             }).expect("encode client response")).expect("send client response");
@@ -331,6 +333,7 @@ async fn client_entry_exit_forwards_controlled_data_plane_message() {
                         kind: FORWARDING_KIND.to_owned(),
                         forwarding_id: context.forwarding_id(),
                         client_session_id: context.client_session_id(),
+                        client_peer: client_identity.peer_id().to_string(),
                         route: context.route().clone(),
                         data: DataPlaneEnvelope { kind: DATA_PLANE_KIND.to_owned(), session_id: relay_session_id, frame: response_frame },
                     }).expect("encode exit response")).expect("send exit response");
