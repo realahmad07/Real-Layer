@@ -1,7 +1,8 @@
 use futures::StreamExt;
 use ghost_layer_network::{
-    ChannelMessage, EncryptedChannel, HandshakeInit, HandshakeResponse, NetworkEvent, NetworkNode,
-    NodeIdentity, RouteBinding, SessionInitiator, SessionResponder, CHANNEL_PROTOCOL_VERSION,
+    DataPlane, DataPlaneEnvelope, DataPlaneMessageType, EncryptedChannel, HandshakeInit,
+    HandshakeResponse, NetworkEvent, NetworkNode, NodeIdentity, RouteBinding, SessionInitiator,
+    SessionResponder, CHANNEL_PROTOCOL_VERSION, DATA_PLANE_KIND, DEFAULT_MAXIMUM_PAYLOAD_SIZE,
 };
 use std::time::Duration;
 
@@ -96,40 +97,52 @@ async fn local_quic_session_binds_one_and_two_hop_routes() {
     );
     let mut client_channel = EncryptedChannel::open(session, CHANNEL_PROTOCOL_VERSION, 4096, 4)
         .expect("open client channel");
-    let ping = client_channel
-        .send(ChannelMessage::Ping)
+    let application_payload = b"hello ghost layer";
+    let frame = DataPlane::open(&mut client_channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE)
+        .expect("open client data plane")
+        .send(application_payload)
         .expect("encrypt ping");
     let session_id = client_channel.session_id();
     client.request_discovery(
         entry_identity.peer_id(),
-        serde_json::to_vec(&ghost_layer_network::ChannelEnvelope {
-            kind: "channel".to_owned(),
+        serde_json::to_vec(&DataPlaneEnvelope {
+            kind: DATA_PLANE_KIND.to_owned(),
             session_id,
-            frame: ping,
+            frame,
         })
-        .expect("encode ping"),
+        .expect("encode data-plane payload"),
     );
-    let mut pong_received = false;
+    let mut acknowledgement_received = false;
     tokio::time::timeout(Duration::from_secs(10), async {
-        while !pong_received {
+        while !acknowledgement_received {
             tokio::select! {
                 Some(event) = client.swarm.next() => if let Some(NetworkEvent::DiscoveryResponse { payload, .. }) = client.translate_event(event) {
-                    let envelope: ghost_layer_network::ChannelEnvelope = serde_json::from_slice(&payload).expect("decode pong envelope");
+                    let envelope: DataPlaneEnvelope = serde_json::from_slice(&payload).expect("decode acknowledgement envelope");
                     assert_eq!(envelope.session_id, session_id);
-                    assert_eq!(client_channel.receive(&envelope.frame).expect("decrypt pong"), ChannelMessage::Pong);
-                    pong_received = true;
+                    let message = DataPlane::open(&mut client_channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE)
+                        .expect("open client data plane")
+                        .receive(&envelope)
+                        .expect("decrypt acknowledgement");
+                    assert_eq!(message.message_type, DataPlaneMessageType::Data);
+                    assert_eq!(message.payload, b"ack: hello ghost layer");
+                    acknowledgement_received = true;
                 },
                 Some(event) = entry.swarm.next() => if let Some(NetworkEvent::DiscoveryRequest { channel, payload, .. }) = entry.translate_event(event) {
-                    let envelope: ghost_layer_network::ChannelEnvelope = serde_json::from_slice(&payload).expect("decode ping envelope");
+                    let envelope: DataPlaneEnvelope = serde_json::from_slice(&payload).expect("decode data-plane payload");
                     let responder_channel = responder_channel.as_mut().expect("responder channel");
-                    assert_eq!(responder_channel.receive(&envelope.frame).expect("decrypt ping"), ChannelMessage::Ping);
-                    let pong = responder_channel.send(ChannelMessage::Pong).expect("encrypt pong");
-                    entry.respond_to_discovery(channel, serde_json::to_vec(&ghost_layer_network::ChannelEnvelope { kind: "channel".to_owned(), session_id: envelope.session_id, frame: pong }).expect("encode pong")).expect("send pong");
+                    let mut data_plane = DataPlane::open(responder_channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE)
+                        .expect("open responder data plane");
+                    let message = data_plane.receive(&envelope).expect("decrypt data-plane payload");
+                    assert_eq!(message.payload, application_payload);
+                    let mut acknowledgement = b"ack: ".to_vec();
+                    acknowledgement.extend(message.payload);
+                    let response_frame = data_plane.send(&acknowledgement).expect("encrypt acknowledgement");
+                    entry.respond_to_discovery(channel, serde_json::to_vec(&DataPlaneEnvelope { kind: DATA_PLANE_KIND.to_owned(), session_id: envelope.session_id, frame: response_frame }).expect("encode acknowledgement")).expect("send acknowledgement");
                 },
             }
         }
     }).await.expect("encrypted ping-pong timeout");
-    assert!(pong_received);
+    assert!(acknowledgement_received);
     client_channel.close().expect("close client channel");
     let _ = std::fs::remove_dir_all(directory);
 }

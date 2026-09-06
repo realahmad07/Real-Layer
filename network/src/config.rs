@@ -24,6 +24,16 @@ const PROTOCOL_VERSION: &str = "GHOST_PROTOCOL_VERSION";
 const DISCOVERY_REQUIRED_TRANSPORT: &str = "GHOST_DISCOVERY_REQUIRED_TRANSPORT";
 const DISCOVERY_REQUIRED_CAPABILITIES: &str = "GHOST_DISCOVERY_REQUIRED_CAPABILITIES";
 const ROUTE_MODE: &str = "GHOST_ROUTE_MODE";
+const TUN_ENABLED: &str = "GHOST_TUN_ENABLED";
+const TUN_INTERFACE_NAME: &str = "GHOST_TUN_INTERFACE_NAME";
+const TUN_MTU: &str = "GHOST_TUN_MTU";
+const TUN_MAXIMUM_PACKET_SIZE: &str = "GHOST_TUN_MAXIMUM_PACKET_SIZE";
+const TUN_READ_BUFFER_LIMIT: &str = "GHOST_TUN_READ_BUFFER_LIMIT";
+const TUN_WRITE_BUFFER_LIMIT: &str = "GHOST_TUN_WRITE_BUFFER_LIMIT";
+const ALLOWED_EXIT_DESTINATIONS: &str = "GHOST_ALLOWED_EXIT_DESTINATIONS";
+const NAT_ENABLED: &str = "GHOST_NAT_ENABLED";
+const DNS_ENABLED: &str = "GHOST_DNS_ENABLED";
+const EXTERNAL_TEST_DESTINATION: &str = "GHOST_EXTERNAL_TEST_DESTINATION";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RouteMode {
@@ -78,6 +88,52 @@ pub enum LogLevel {
     Trace,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunConfig {
+    pub enabled: bool,
+    pub interface_name: String,
+    pub mtu: usize,
+    pub maximum_packet_size: usize,
+    pub read_buffer_limit: usize,
+    pub write_buffer_limit: usize,
+}
+
+impl TunConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.interface_name.trim().is_empty() {
+            return Err(ConfigError::Invalid {
+                key: TUN_INTERFACE_NAME,
+                value: self.interface_name.clone(),
+            });
+        }
+        if self.mtu == 0 || self.mtu > u16::MAX as usize {
+            return Err(ConfigError::Invalid {
+                key: TUN_MTU,
+                value: self.mtu.to_string(),
+            });
+        }
+        if self.maximum_packet_size == 0 || self.maximum_packet_size > self.mtu {
+            return Err(ConfigError::Invalid {
+                key: TUN_MAXIMUM_PACKET_SIZE,
+                value: self.maximum_packet_size.to_string(),
+            });
+        }
+        if self.read_buffer_limit == 0 {
+            return Err(ConfigError::Invalid {
+                key: TUN_READ_BUFFER_LIMIT,
+                value: self.read_buffer_limit.to_string(),
+            });
+        }
+        if self.write_buffer_limit == 0 {
+            return Err(ConfigError::Invalid {
+                key: TUN_WRITE_BUFFER_LIMIT,
+                value: self.write_buffer_limit.to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
 impl FromStr for LogLevel {
     type Err = ConfigError;
 
@@ -116,6 +172,11 @@ pub struct NodeConfig {
     pub discovery_required_transport: String,
     pub discovery_required_capabilities: Vec<String>,
     pub route_mode: RouteMode,
+    pub tun: TunConfig,
+    pub allowed_exit_destinations: Vec<String>,
+    pub nat_enabled: bool,
+    pub dns_enabled: bool,
+    pub external_test_destination: Option<String>,
 }
 
 impl NodeConfig {
@@ -125,7 +186,7 @@ impl NodeConfig {
     }
 
     pub fn from_map(values: &HashMap<String, String>) -> Result<Self, ConfigError> {
-        Ok(Self {
+        let config = Self {
             node_id: optional(values, NODE_ID).unwrap_or_else(|| "node".to_owned()),
             listen_address: required(values, LISTEN_ADDRESS)?,
             advertised_address: optional(values, ADVERTISED_ADDRESS),
@@ -183,7 +244,112 @@ impl NodeConfig {
                 })
                 .unwrap_or_else(|| vec!["relay".to_owned()]),
             route_mode: parse_or_default(values, ROUTE_MODE, "one-hop")?,
+            tun: TunConfig {
+                enabled: parse_bool_or_default(values, TUN_ENABLED, false)?,
+                interface_name: optional(values, TUN_INTERFACE_NAME)
+                    .unwrap_or_else(|| "ghost0".to_owned()),
+                mtu: parse_usize_or_default(values, TUN_MTU, 1500)?,
+                maximum_packet_size: parse_usize_or_default(values, TUN_MAXIMUM_PACKET_SIZE, 1500)?,
+                read_buffer_limit: parse_usize_or_default(values, TUN_READ_BUFFER_LIMIT, 16)?,
+                write_buffer_limit: parse_usize_or_default(values, TUN_WRITE_BUFFER_LIMIT, 16)?,
+            },
+            allowed_exit_destinations: parse_allowed_destinations(values)?,
+            nat_enabled: parse_bool_or_default(values, NAT_ENABLED, false)?,
+            dns_enabled: parse_bool_or_default(values, DNS_ENABLED, false)?,
+            external_test_destination: parse_external_test_destination(values)?,
+        };
+        config.tun.validate()?;
+        if let Some(destination) = &config.external_test_destination {
+            if !config.allowed_exit_destinations.contains(destination) {
+                return Err(ConfigError::Invalid {
+                    key: EXTERNAL_TEST_DESTINATION,
+                    value: destination.clone(),
+                });
+            }
+        }
+        Ok(config)
+    }
+}
+
+fn parse_external_test_destination(
+    values: &HashMap<String, String>,
+) -> Result<Option<String>, ConfigError> {
+    let Some(destination) = optional(values, EXTERNAL_TEST_DESTINATION) else {
+        return Ok(None);
+    };
+    let address =
+        destination
+            .parse::<std::net::SocketAddr>()
+            .map_err(|_| ConfigError::Invalid {
+                key: EXTERNAL_TEST_DESTINATION,
+                value: destination.clone(),
+            })?;
+    if address.port() == 0 || address.ip().is_unspecified() {
+        return Err(ConfigError::Invalid {
+            key: EXTERNAL_TEST_DESTINATION,
+            value: destination,
+        });
+    }
+    Ok(Some(address.to_string()))
+}
+
+fn parse_allowed_destinations(
+    values: &HashMap<String, String>,
+) -> Result<Vec<String>, ConfigError> {
+    let Some(raw) = optional(values, ALLOWED_EXIT_DESTINATIONS) else {
+        return Ok(Vec::new());
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|destination| !destination.is_empty())
+        .map(|destination| {
+            let address =
+                destination
+                    .parse::<std::net::SocketAddr>()
+                    .map_err(|_| ConfigError::Invalid {
+                        key: ALLOWED_EXIT_DESTINATIONS,
+                        value: destination.to_owned(),
+                    })?;
+            if address.port() == 0 {
+                return Err(ConfigError::Invalid {
+                    key: ALLOWED_EXIT_DESTINATIONS,
+                    value: destination.to_owned(),
+                });
+            }
+            Ok(address.to_string())
         })
+        .collect()
+}
+
+fn parse_bool_or_default(
+    values: &HashMap<String, String>,
+    key: &'static str,
+    default: bool,
+) -> Result<bool, ConfigError> {
+    match values.get(key) {
+        None => Ok(default),
+        Some(value) => match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Ok(true),
+            "0" | "false" | "no" | "off" => Ok(false),
+            _ => Err(ConfigError::Invalid {
+                key,
+                value: value.clone(),
+            }),
+        },
+    }
+}
+
+fn parse_usize_or_default(
+    values: &HashMap<String, String>,
+    key: &'static str,
+    default: usize,
+) -> Result<usize, ConfigError> {
+    match values.get(key) {
+        None => Ok(default),
+        Some(value) => value.parse().map_err(|_| ConfigError::Invalid {
+            key,
+            value: value.clone(),
+        }),
     }
 }
 
@@ -254,6 +420,8 @@ mod tests {
         assert_eq!(config.network_environment, NetworkEnvironment::Development);
         assert_eq!(config.log_level, LogLevel::Info);
         assert_eq!(config.magicblock_endpoint, None);
+        assert!(!config.tun.enabled);
+        assert_eq!(config.tun.mtu, 1500);
     }
 
     #[test]
@@ -282,6 +450,97 @@ mod tests {
             config.magicblock_endpoint.as_deref(),
             Some("https://magicblock.example")
         );
+    }
+
+    #[test]
+    fn parses_tun_values_and_rejects_invalid_limits() {
+        let mut values = complete_values();
+        values.insert(TUN_ENABLED.to_owned(), "true".to_owned());
+        values.insert(TUN_INTERFACE_NAME.to_owned(), "ghost-test".to_owned());
+        values.insert(TUN_MTU.to_owned(), "1400".to_owned());
+        values.insert(TUN_MAXIMUM_PACKET_SIZE.to_owned(), "1400".to_owned());
+        values.insert(TUN_READ_BUFFER_LIMIT.to_owned(), "4".to_owned());
+        values.insert(TUN_WRITE_BUFFER_LIMIT.to_owned(), "5".to_owned());
+        let config = NodeConfig::from_map(&values).expect("valid tun config");
+        assert_eq!(config.tun.interface_name, "ghost-test");
+        assert_eq!(config.tun.mtu, 1400);
+        assert_eq!(config.tun.read_buffer_limit, 4);
+        assert_eq!(config.tun.write_buffer_limit, 5);
+
+        values.insert(TUN_MTU.to_owned(), "invalid".to_owned());
+        assert!(matches!(
+            NodeConfig::from_map(&values),
+            Err(ConfigError::Invalid { key: TUN_MTU, .. })
+        ));
+    }
+
+    #[test]
+    fn parses_explicit_exit_destinations_without_hostname_resolution() {
+        let mut values = complete_values();
+        values.insert(
+            ALLOWED_EXIT_DESTINATIONS.to_owned(),
+            "192.0.2.10:9000, 127.0.0.1:9001, 192.0.2.10:9000".to_owned(),
+        );
+        let config = NodeConfig::from_map(&values).expect("valid destinations");
+        assert_eq!(
+            config.allowed_exit_destinations,
+            vec![
+                "192.0.2.10:9000".to_owned(),
+                "127.0.0.1:9001".to_owned(),
+                "192.0.2.10:9000".to_owned()
+            ]
+        );
+        values.insert(
+            ALLOWED_EXIT_DESTINATIONS.to_owned(),
+            "example.test:9000".to_owned(),
+        );
+        assert!(matches!(
+            NodeConfig::from_map(&values),
+            Err(ConfigError::Invalid {
+                key: ALLOWED_EXIT_DESTINATIONS,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_literal_external_test_destination() {
+        let mut values = complete_values();
+        values.insert(
+            EXTERNAL_TEST_DESTINATION.to_owned(),
+            "192.0.2.10:9000".to_owned(),
+        );
+        values.insert(
+            ALLOWED_EXIT_DESTINATIONS.to_owned(),
+            "192.0.2.10:9000".to_owned(),
+        );
+        let config = NodeConfig::from_map(&values).expect("valid external test destination");
+        assert_eq!(
+            config.external_test_destination.as_deref(),
+            Some("192.0.2.10:9000")
+        );
+        values.insert(
+            ALLOWED_EXIT_DESTINATIONS.to_owned(),
+            "192.0.2.11:9000".to_owned(),
+        );
+        assert!(matches!(
+            NodeConfig::from_map(&values),
+            Err(ConfigError::Invalid {
+                key: EXTERNAL_TEST_DESTINATION,
+                ..
+            })
+        ));
+        values.insert(
+            EXTERNAL_TEST_DESTINATION.to_owned(),
+            "test.example:9000".to_owned(),
+        );
+        assert!(matches!(
+            NodeConfig::from_map(&values),
+            Err(ConfigError::Invalid {
+                key: EXTERNAL_TEST_DESTINATION,
+                ..
+            })
+        ));
     }
 
     #[test]

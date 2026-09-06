@@ -8,9 +8,9 @@ The control plane manages node identity, discovery, registration, staking, healt
 
 ## Data Plane
 
-The future data plane will carry user traffic through selected relay nodes over encrypted transport. User traffic and payload data must remain off-chain. Solana and MagicBlock must never be used as a data path for user traffic.
+The data plane carries only controlled application-level test messages through selected relay nodes over encrypted transport. User traffic and payload data must remain off-chain. Solana and MagicBlock must never be used as a data path for user traffic.
 
-The repository intentionally does not implement packet forwarding, VPN behavior, tunneling, traffic obfuscation, or privacy-sensitive cryptography in this phase.
+The repository intentionally does not implement packet forwarding, VPN behavior, tunneling, traffic obfuscation, or privacy-sensitive cryptography. Prompt 9 adds only bounded forwarding of a typed Ghost Layer application message between an Entry and Exit relay.
 
 ## Client
 
@@ -110,7 +110,7 @@ The ranking code is isolated in `RelayRanking` so a future decentralized reputat
 
 ### Current limitations and future discovery
 
-The current mechanism is configured/local libp2p discovery. It does not implement a DHT, Solana registry, MagicBlock coordination, cryptographic attestation, route selection between multiple hops, VPN tunneling, or traffic forwarding. A future architecture may layer a Solana registry and MagicBlock coordination above discovery, but those systems must produce relay candidates from control-plane data only and must never carry user traffic.
+The current mechanism is configured/local libp2p discovery. It does not implement a DHT, Solana registry, MagicBlock coordination, cryptographic attestation, VPN tunneling, or Internet traffic forwarding. A future architecture may layer a Solana registry and MagicBlock coordination above discovery, but those systems must produce relay candidates from control-plane data only and must never carry user traffic.
 
 ## Route Selection
 
@@ -134,7 +134,7 @@ The Entry Relay is the first selected hop reached by the client. The Exit Relay 
 
 The route mode is configured with `GHOST_ROUTE_MODE=one-hop` or `GHOST_ROUTE_MODE=two-hop`; one-hop is the default. The client logs the selected route but does not connect application traffic through it.
 
-**Route selection is metadata-only in this stage. User traffic forwarding will be implemented in a later stage after route selection and session establishment are validated.**
+Route selection remains metadata-only as a selection mechanism, but the selected two-hop route now feeds the controlled forwarding test described below. It does not authorize arbitrary destinations or traffic.
 
 ## Secure Session Establishment
 
@@ -175,20 +175,132 @@ existing request/response application carrier
 	↓
 EncryptedChannel
 	↓
-controlled Ping/Pong or SessionData messages
+Encrypted data plane for controlled application payloads
 ```
 
 `EncryptedChannel` owns the associated SessionId, authenticated peer, route context, lifecycle state, independent send/receive sequences, protocol version, maximum frame size, and bounded outbound queue. It consumes the already-established `SecureSession`; it does not derive another key set.
 
-Each frame contains a length-prefixed serialized header and ciphertext. The header includes protocol version, SessionId, message type, sequence number, and ciphertext length. The header with its length field is bounded before parsing, and ciphertext length must match the remaining frame exactly. The supported message types are Ping, Pong, SessionData, and Close. SessionData is limited to controlled protocol tests and is not connected to operating-system traffic.
+Each frame contains a length-prefixed serialized header and ciphertext. The header includes protocol version, SessionId, message type, sequence number, and ciphertext length. The header with its length field is bounded before parsing, and ciphertext length must match the remaining frame exactly. The supported message types are Ping, Pong, legacy SessionData, DataPlane, and Close. DataPlane is a distinct encrypted message type and is carried in a `DataPlaneEnvelope` whose kind is `data_plane`.
 
 The header metadata is authenticated as AEAD associated data. `SecureSession` supplies the ChaCha20-Poly1305 key and its monotonic nonce construction; the channel maintains separate strictly increasing directional sequence numbers. Receive sequence numbers must arrive exactly in order, duplicates are rejected as replay, gaps are rejected, and the channel cannot wrap the sequence counter. A channel never accepts a frame for another SessionId or after closure.
 
 Outbound buffering is bounded. A caller receives `Backpressure` when the configured pending-message capacity is full rather than allowing unbounded memory growth. Malformed, oversized, unsupported, unauthenticated, replayed, and incorrectly sequenced frames are rejected without exposing plaintext.
 
-The current client/relay flow opens this channel after session establishment, exchanges one authenticated Ping/Pong, and closes. For a two-hop route, the channel preserves the Entry/Exit route binding in the underlying session context, but Entry-to-Exit forwarding and layered/onion forwarding are not implemented.
+The `DataPlane` abstraction accepts only bounded application payloads, binds each envelope to its expected SessionId, and returns a structured message containing the session ID, channel sequence number, data type, and payload. It delegates encryption, framing, ordering, replay rejection, lifecycle, and backpressure to `EncryptedChannel`. The current client/relay flow establishes a secure session, sends `hello ghost layer`, and receives the controlled encrypted response `ack: hello ghost layer` before closing. No payload contents are logged.
 
-Encrypted session channels are currently used for controlled protocol messages only. Real user traffic forwarding, VPN tunneling, TUN/TAP integration, and Entry-to-Exit forwarding are intentionally deferred.
+The data-plane lifecycle is:
+
+```text
+application payload
+	↓ size and session validation
+DataPlane
+	↓ DataPlane message
+EncryptedChannel
+	↓ AEAD frame with authenticated header
+libp2p/QUIC request-response carrier
+```
+
+For a two-hop route, the channel preserves the Entry/Exit route binding in the underlying session context, but Entry-to-Exit forwarding and layered/onion forwarding are not implemented. Ghost Layer does not yet forward arbitrary Internet traffic.
+
+Encrypted session channels and the data plane are currently used for controlled application-level protocol tests only. This is not a VPN: there is no TUN/TAP interface, OS routing, NAT, DNS forwarding, proxy, or arbitrary IP packet forwarding. Future TUN/TAP integration must feed a separate bounded adapter, and future Internet forwarding must sit beyond the current relay-terminating data-plane boundary.
+
+## Multi-Hop Forwarding
+
+Prompt 9 adds the first controlled multi-hop path:
+
+```text
+Client
+	↓ client ↔ Entry SecureSession + EncryptedChannel
+Entry Relay
+	↓ Entry ↔ Exit SecureSession + EncryptedChannel
+Exit Relay
+	↓ controlled acknowledgement
+Entry Relay
+	↓
+Client
+```
+
+`ForwardingContext` binds the client SessionId, client PeerId, Entry PeerId, Exit PeerId, selected `RouteBinding::TwoHop`, and a generated forwarding identity. Its explicit state machine is `Created -> Connecting -> Established -> Forwarding -> Closing -> Closed`. Invalid transitions, duplicate request/direction pairs, wrong peers, wrong sessions, malformed forwarding envelopes, and route mismatches fail closed.
+
+`ForwardingMessage` is the only relay-to-relay application envelope. It contains forwarding identity, client session identity, the exact selected route, and a typed encrypted `DataPlaneEnvelope`; it is not a generic byte-forwarding API. Entry validates the client-bound channel, decrypts the controlled data-plane message, and re-encrypts only that typed application payload onto its authenticated relay-to-relay channel. Exit validates the forwarding context and Entry identity, processes the controlled test payload, and returns an acknowledgement over the same bounded encrypted channel. No private keys, session keys, or payload contents are logged.
+
+The client-to-Entry and Entry-to-Exit channels are separate secure sessions with independent identities, AEAD keys, nonces, and sequence/replay state. The forwarding context prevents cross-session routing, while the route binding prevents an Entry from silently substituting an unauthorized Exit. Channel errors, backpressure, malformed frames, duplicate messages, closed sessions, and unavailable peers are surfaced as structured forwarding or data-plane errors; bounded integration timeouts terminate failed local flows.
+
+The current multi-hop implementation forwards only the controlled `hello ghost layer` application message and returns `ack: hello ghost layer`. Ghost Layer still does not provide a VPN or Internet traffic forwarding. There is no TUN/TAP, OS routing, NAT, DNS, SOCKS/HTTP proxy, arbitrary IP packet handling, public Internet access, or Solana/MagicBlock coordination. Future forwarding adapters must preserve this context and state boundary.
+
+## Restricted Exit Network Adapter
+
+Prompt 13 adds a deliberately narrow outbound boundary after the Exit Packet Handler:
+
+```text
+Exit Relay
+	↓ validated NetworkPacket and forwarding context
+ExitPacketHandler
+	↓ explicit DestinationPolicy
+TcpExitNetworkAdapter
+	↓ localhost-only test destination
+local test server
+```
+
+`DestinationPolicy` accepts only literal `SocketAddr` values that are explicitly allowlisted. Loopback remains available through the development helper, while configured external IPv4/IPv6 addresses are accepted only when their exact IP and port appear in the allowlist. It rejects malformed addresses, port zero, and destinations that were not configured. It never resolves hostnames, accepts wildcards, falls back to unrestricted destinations, changes routes, or opens UDP connections.
+
+`TcpExitNetworkAdapter` uses Rust TCP primitives with bounded request and response sizes, connection/read/write timeouts, and clean shutdown. The Exit Packet Handler invokes it only after validating the client session, selected route, Entry and Exit identities, relay session, forwarding state, and duplicate packet identity. The response is validated back into `NetworkPacket` before returning through Entry. The integration test uses a deterministic local TCP server as the explicitly configured destination; the same policy can hold a controlled external test address without adding an unrestricted proxy.
+
+This adapter is a controlled test boundary, not a proxy. UDP, NAT, DNS, route installation, arbitrary sockets, unrestricted Internet forwarding, and production VPN behavior remain future work. The Exit Packet Handler and adapter intentionally have no capability to send traffic outside the explicit test allowlist. `GHOST_ALLOWED_EXIT_DESTINATIONS` configures literal `IP:PORT` entries and defaults to an empty list.
+
+## Controlled External TCP Test
+
+Prompt 16 adds an opt-in external connectivity proof without making normal tests depend on the public Internet. Set `GHOST_EXTERNAL_TEST_DESTINATION` to a literal IPv4/IPv6 `IP:PORT` and include the exact same value in `GHOST_ALLOWED_EXIT_DESTINATIONS`; configuration fails closed when it is absent from the allowlist. The opt-in test sends the bounded application request `ghost-layer-external-test` through the Exit TCP adapter and verifies the configured deterministic response. The existing localhost integration test remains the deterministic proof of the complete Client -> Entry -> Exit encrypted path.
+
+With no external destination configured, the external test prints a skip message and normal `cargo test --workspace` remains offline-safe. The existing localhost multi-hop test is unchanged and remains deterministic. Hostnames, wildcard addresses, arbitrary user destinations, and fallback destinations are rejected. This is an application-level controlled TCP test only: NAT, DNS interception, OS routing, UDP, transparent proxying, and production Internet forwarding remain disabled.
+
+## VPN Networking Foundations
+
+Prompt 15 adds platform-independent models needed before a production data plane, without enabling those production behaviors. `PacketPipeline` applies the following bounded sequence:
+
+```text
+NetworkPacket
+	↓ packet and MTU validation
+destination classification
+	↓ deterministic RoutingDecision
+optional future NAT boundary
+	↓ existing DataPlane
+encrypted session / multi-hop forwarding
+```
+
+The destination classifier reads only IPv4/IPv6 packet headers and never resolves hostnames. Loopback, private/unique-local, and link-local addresses are classified for local/system handling; multicast and IPv4 broadcast are dropped by the default policy; public addresses are eligible for the Ghost Layer path; unspecified or malformed destinations are unsupported. These classifications are policy inputs, not permission to alter the operating system routing table.
+
+`MtuPolicy` owns the configured tunnel MTU and maximum packet size. It rejects empty, malformed, and oversized packets, preserves bytes within the limit, and does not fragment or truncate. `NatTable` and `ReturnPathTable` are bounded in-memory state models with deterministic allocation, reverse lookup, expiration, duplicate detection, and cleanup. They do not modify OS NAT state, expose the machine as a gateway, or forward return traffic.
+
+`DnsResolver` is an explicit mock-capable interface with request/response bounds and a timeout setting. `MockDnsResolver` is disabled unless explicitly enabled in its construction and is used only for deterministic tests. Ghost Layer does not intercept DNS, modify system DNS, or resolve arbitrary hostnames automatically. `GHOST_NAT_ENABLED` and `GHOST_DNS_ENABLED` default to false.
+
+NAT is NOT active. DNS interception is NOT active. OS routing is NOT modified, and default-route installation is NOT implemented. UDP is NOT implemented. Unrestricted Internet forwarding is NOT implemented. Production VPN behavior is NOT implemented. The existing controlled TCP allowlist and Client -> Entry -> Exit localhost test remain the only outbound path.
+
+## TUN/TAP Boundary
+
+Prompt 10 adds a platform-independent `TunDevice` boundary without enabling system-wide routing:
+
+```text
+TunDevice
+	↓ bounded read
+NetworkPacket
+	↓ IPv4/IPv6 boundary validation and MTU check
+TunDataPlane
+	↓ existing DataPlane and encrypted session
+controlled multi-hop test path
+```
+
+`NetworkPacket` owns validated bytes, identifies only IPv4 or IPv6, rejects empty, malformed, unknown-version, over-limit, and over-MTU input, and does not implement an IP stack or fragmentation. `TunConfig` supplies disabled-by-default interface settings, MTU, maximum packet size, and bounded read/write queue limits.
+
+`MockTunDevice` is the deterministic implementation used by tests. It supports packet injection, reads, writes, queue-full errors, invalid/oversized packet rejection, and clean closure. `TunDataPlane` adapts this device to the existing encrypted `DataPlane`; it does not create a new encryption or forwarding path. The three-node test sends a controlled minimal IPv4 packet from Mock TUN through Client -> Entry -> Exit and writes the returned bytes to a destination Mock TUN.
+
+The Windows implementation uses the maintained `tun` Rust crate (`0.8.14`) and its Wintun backend. The adapter is compiled on Windows but requires the Wintun driver/runtime to be installed separately. `WindowsTunDevice::open` returns a structured initialization error when the driver or device is unavailable; no driver functionality is faked. The current environment has not executed a real-device test unless the manual procedure below is run with Wintun installed. Ghost Layer is not yet a production VPN and does not yet forward arbitrary Internet traffic. There is no automatic OS routing, firewall manipulation, NAT, DNS interception/tunneling, proxying, fragmentation, or public Internet access.
+
+### Windows manual TUN test
+
+Mode A is the default Mock TUN path and requires no driver. Mode B is the Windows real-device path and requires the Wintun driver/runtime appropriate to the installed `tun` crate. Verify the installation using the Wintun distribution or Windows device-management tools before starting Ghost Layer; do not modify route tables or firewall settings.
+
+For a controlled manual check, set `GHOST_TUN_ENABLED=true`, choose `GHOST_TUN_INTERFACE_NAME`, and set `GHOST_TUN_MTU` and `GHOST_TUN_MAXIMUM_PACKET_SIZE` to matching bounded values. Start the client with its normal development relay configuration. A successful open is reported through the structured client/adapter lifecycle; a missing driver reports device initialization failure and exits without pretending that a TUN exists. Inject only a controlled IPv4/IPv6 test packet through the named interface, verify that it reaches the existing packet-validation/data-plane boundary, and verify a controlled response is written back. Shut down with the normal process signal so the adapter is closed. This procedure does not route ordinary Windows traffic and does not require Internet connectivity.
 
 ### Local two-node run
 
@@ -228,4 +340,4 @@ The MVP direction supports future 1-hop and 2-hop routing:
 - 1-hop routing: a client selects one relay for a session.
 - 2-hop routing: a client selects an entry relay and a separate exit relay.
 
-The exact protocol, relay selection policy, metadata handling, failure behavior, and privacy properties remain TODOs. No routing implementation is included in this foundation.
+The exact production protocol, relay selection policy, metadata handling, failure behavior, and privacy properties remain future work. The current implementation supports only the controlled, local two-hop application test documented above.

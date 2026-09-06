@@ -11,6 +11,7 @@ pub enum ChannelMessage {
     Ping,
     Pong,
     SessionData(Vec<u8>),
+    DataPlane(Vec<u8>),
     Close,
 }
 
@@ -44,6 +45,7 @@ enum MessageType {
     Ping,
     Pong,
     SessionData,
+    DataPlane,
     Close,
 }
 
@@ -53,6 +55,7 @@ impl From<&ChannelMessage> for MessageType {
             ChannelMessage::Ping => Self::Ping,
             ChannelMessage::Pong => Self::Pong,
             ChannelMessage::SessionData(_) => Self::SessionData,
+            ChannelMessage::DataPlane(_) => Self::DataPlane,
             ChannelMessage::Close => Self::Close,
         }
     }

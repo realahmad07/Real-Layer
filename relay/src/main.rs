@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use ghost_layer_network::{
-    ChannelEnvelope, ChannelMessage, EncryptedChannel, HandshakeInit, NetworkEvent, NetworkNode,
-    NodeConfig, NodeIdentity, SessionResponder, CHANNEL_PROTOCOL_VERSION,
+    DataPlane, DataPlaneEnvelope, EncryptedChannel, HandshakeInit, NetworkEvent, NetworkNode,
+    NodeConfig, NodeIdentity, SessionResponder, CHANNEL_PROTOCOL_VERSION, DATA_PLANE_KIND,
+    DEFAULT_MAXIMUM_PAYLOAD_SIZE,
 };
 use ghost_layer_relay::{
     HealthClass, HealthThresholds, InMemoryRelayRegistry, RelayHealth, RelayHeartbeat,
@@ -65,12 +66,17 @@ async fn main() -> Result<()> {
                                     node.respond_to_discovery(channel, response)?;
                                 }
                             }
-                        } else if let Ok(envelope) = serde_json::from_slice::<ChannelEnvelope>(&payload) {
-                            if envelope.kind == "channel" {
+                        } else if let Ok(envelope) = serde_json::from_slice::<DataPlaneEnvelope>(&payload) {
+                            if envelope.kind == DATA_PLANE_KIND {
                                 if let Some(channel_state) = channels.get_mut(&envelope.session_id) {
-                                    if let Ok(ChannelMessage::Ping) = channel_state.receive(&envelope.frame) {
-                                        let response_frame = channel_state.send(ChannelMessage::Pong).map_err(|error| anyhow::anyhow!("send channel pong: {error}"))?;
-                                        let response = ChannelEnvelope { kind: "channel".to_owned(), session_id: envelope.session_id, frame: response_frame };
+                                    let mut data_plane = DataPlane::open(channel_state, DEFAULT_MAXIMUM_PAYLOAD_SIZE)
+                                        .map_err(|error| anyhow::anyhow!("open data plane: {error}"))?;
+                                    if let Ok(message) = data_plane.receive(&envelope) {
+                                        let mut acknowledgement = b"ack: ".to_vec();
+                                        acknowledgement.extend(message.payload);
+                                        let response_frame = data_plane.send(&acknowledgement)
+                                            .map_err(|error| anyhow::anyhow!("send data-plane acknowledgement: {error}"))?;
+                                        let response = DataPlaneEnvelope { kind: DATA_PLANE_KIND.to_owned(), session_id: envelope.session_id, frame: response_frame };
                                         node.respond_to_discovery(channel, serde_json::to_vec(&response)?)?;
                                     }
                                 } else {

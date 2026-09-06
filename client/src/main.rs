@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use ghost_layer_network::{
-    ChannelEnvelope, ChannelMessage, ConfiguredPeerDiscovery, DiscoveryService, EncryptedChannel,
-    HandshakeResponse, NetworkEvent, NetworkNode, NodeConfig, NodeIdentity, RouteBinding,
-    SessionInitiator, CHANNEL_PROTOCOL_VERSION,
+    ConfiguredPeerDiscovery, DataPlane, DataPlaneEnvelope, DataPlaneMessageType, DiscoveryService,
+    EncryptedChannel, HandshakeResponse, NetworkEvent, NetworkNode, NodeConfig, NodeIdentity,
+    RouteBinding, SessionInitiator, CHANNEL_PROTOCOL_VERSION, DATA_PLANE_KIND,
+    DEFAULT_MAXIMUM_PAYLOAD_SIZE,
 };
 use ghost_layer_relay::{
     CandidateRequirements, RelayCandidate, RelayMetadataRequest, RelayRanking, Route,
@@ -20,6 +21,10 @@ async fn main() -> Result<()> {
     let peer_id = identity.peer_id();
     let mut node = NetworkNode::new(&identity, config.connection_timeout)?;
     node.listen(&config.listen_address)?;
+    let mut tun_device = open_configured_tun(&config.tun)?;
+    if tun_device.is_some() {
+        info!(interface = %config.tun.interface_name, "Windows TUN device opened");
+    }
     let discovery = ConfiguredPeerDiscovery::from_addresses(&config.bootstrap_peers)?;
     let requirements = CandidateRequirements {
         protocol_version: config.protocol_version.clone(),
@@ -83,13 +88,19 @@ async fn main() -> Result<()> {
                                         .map_err(|error| {
                                             anyhow::anyhow!("open encrypted channel: {error}")
                                         })?;
-                                        let frame = channel.send(ChannelMessage::Ping).map_err(
-                                            |error| {
-                                                anyhow::anyhow!("encrypt channel ping: {error}")
-                                            },
-                                        )?;
-                                        let envelope = ChannelEnvelope {
-                                            kind: "channel".to_owned(),
+                                        let frame = DataPlane::open(
+                                            &mut channel,
+                                            DEFAULT_MAXIMUM_PAYLOAD_SIZE,
+                                        )
+                                        .map_err(|error| {
+                                            anyhow::anyhow!("open data plane: {error}")
+                                        })?
+                                        .send(b"hello ghost layer")
+                                        .map_err(|error| {
+                                            anyhow::anyhow!("encrypt data-plane payload: {error}")
+                                        })?;
+                                        let envelope = DataPlaneEnvelope {
+                                            kind: DATA_PLANE_KIND.to_owned(),
                                             session_id,
                                             frame,
                                         };
@@ -106,13 +117,19 @@ async fn main() -> Result<()> {
                                 }
                             }
                         }
-                    } else if let Ok(envelope) = serde_json::from_slice::<ChannelEnvelope>(&payload)
+                    } else if let Ok(envelope) =
+                        serde_json::from_slice::<DataPlaneEnvelope>(&payload)
                     {
-                        if envelope.kind == "channel" {
+                        if envelope.kind == DATA_PLANE_KIND {
                             if let Some(channel) = active_channel.as_mut() {
-                                match channel.receive(&envelope.frame) {
-                                    Ok(ChannelMessage::Pong) => {
-                                        info!(session_id = %envelope.session_id, "authenticated protocol Pong received");
+                                match DataPlane::open(channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE)
+                                    .and_then(|mut plane| plane.receive(&envelope))
+                                {
+                                    Ok(message)
+                                        if message.message_type == DataPlaneMessageType::Data
+                                            && message.payload.starts_with(b"ack: ") =>
+                                    {
+                                        info!(session_id = %envelope.session_id, "encrypted data-plane acknowledgement received");
                                         channel.close().map_err(|error| {
                                             anyhow::anyhow!("close encrypted channel: {error}")
                                         })?;
@@ -200,7 +217,33 @@ async fn main() -> Result<()> {
             }
         }
     }
+    if let Some(device) = tun_device.as_mut() {
+        device
+            .close()
+            .map_err(|error| anyhow::anyhow!("close TUN device: {error}"))?;
+    }
     Ok(())
+}
+
+fn open_configured_tun(
+    config: &ghost_layer_network::TunConfig,
+) -> Result<Option<Box<dyn ghost_layer_network::TunDevice>>> {
+    if !config.enabled {
+        return Ok(None);
+    }
+    #[cfg(windows)]
+    {
+        let device = ghost_layer_network::tun::windows::WindowsTunDevice::open(config.clone())
+            .map_err(|error| anyhow::anyhow!("open Windows TUN device: {error}"))?;
+        Ok(Some(Box::new(device)))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = config;
+        Err(anyhow::anyhow!(
+            "Windows TUN support is unavailable on this platform"
+        ))
+    }
 }
 
 fn log_route(route: &Route) {
