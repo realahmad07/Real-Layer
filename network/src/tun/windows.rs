@@ -23,8 +23,12 @@ impl WindowsTunDevice {
             .mtu(config.mtu as u16)
             .layer(tun::Layer::L3)
             .up();
-        let device = tun::create(&device_config)
-            .map_err(|error| TunError::DeviceInitializationFailed(error.to_string()))?;
+        let device = tun::create(&device_config).map_err(|error| {
+            TunError::DeviceInitializationFailed(format!(
+                "Wintun driver or interface '{}' is unavailable: {error}",
+                config.interface_name
+            ))
+        })?;
         Ok(Self {
             device,
             config,

@@ -1,4 +1,5 @@
 use crate::error::ConfigError;
+use crate::os_routing::IpPrefix;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
@@ -34,6 +35,8 @@ const ALLOWED_EXIT_DESTINATIONS: &str = "GHOST_ALLOWED_EXIT_DESTINATIONS";
 const NAT_ENABLED: &str = "GHOST_NAT_ENABLED";
 const DNS_ENABLED: &str = "GHOST_DNS_ENABLED";
 const EXTERNAL_TEST_DESTINATION: &str = "GHOST_EXTERNAL_TEST_DESTINATION";
+const OS_ROUTING_ENABLED: &str = "GHOST_OS_ROUTING_ENABLED";
+const OS_ROUTES: &str = "GHOST_OS_ROUTES";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RouteMode {
@@ -177,6 +180,8 @@ pub struct NodeConfig {
     pub nat_enabled: bool,
     pub dns_enabled: bool,
     pub external_test_destination: Option<String>,
+    pub os_routing_enabled: bool,
+    pub os_routes: Vec<IpPrefix>,
 }
 
 impl NodeConfig {
@@ -257,6 +262,8 @@ impl NodeConfig {
             nat_enabled: parse_bool_or_default(values, NAT_ENABLED, false)?,
             dns_enabled: parse_bool_or_default(values, DNS_ENABLED, false)?,
             external_test_destination: parse_external_test_destination(values)?,
+            os_routing_enabled: parse_bool_or_default(values, OS_ROUTING_ENABLED, false)?,
+            os_routes: parse_os_routes(values)?,
         };
         config.tun.validate()?;
         if let Some(destination) = &config.external_test_destination {
@@ -266,6 +273,13 @@ impl NodeConfig {
                     value: destination.clone(),
                 });
             }
+        }
+        if config.os_routing_enabled && config.os_routes.is_empty() {
+            return Err(ConfigError::Invalid {
+                key: OS_ROUTES,
+                value: "at least one explicit route is required when OS routing is enabled"
+                    .to_owned(),
+            });
         }
         Ok(config)
     }
@@ -317,6 +331,22 @@ fn parse_allowed_destinations(
                 });
             }
             Ok(address.to_string())
+        })
+        .collect()
+}
+
+fn parse_os_routes(values: &HashMap<String, String>) -> Result<Vec<IpPrefix>, ConfigError> {
+    let Some(raw) = optional(values, OS_ROUTES) else {
+        return Ok(Vec::new());
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|route| !route.is_empty())
+        .map(|route| {
+            route.parse::<IpPrefix>().map_err(|_| ConfigError::Invalid {
+                key: OS_ROUTES,
+                value: route.to_owned(),
+            })
         })
         .collect()
 }
@@ -422,6 +452,8 @@ mod tests {
         assert_eq!(config.magicblock_endpoint, None);
         assert!(!config.tun.enabled);
         assert_eq!(config.tun.mtu, 1500);
+        assert!(!config.os_routing_enabled);
+        assert!(config.os_routes.is_empty());
     }
 
     #[test]
@@ -471,6 +503,22 @@ mod tests {
         assert!(matches!(
             NodeConfig::from_map(&values),
             Err(ConfigError::Invalid { key: TUN_MTU, .. })
+        ));
+    }
+
+    #[test]
+    fn parses_controlled_os_routes_and_rejects_default_routes() {
+        let mut values = complete_values();
+        values.insert(OS_ROUTING_ENABLED.to_owned(), "true".to_owned());
+        values.insert(OS_ROUTES.to_owned(), "192.168.1.3/32".to_owned());
+        let config = NodeConfig::from_map(&values).expect("valid controlled route");
+        assert!(config.os_routing_enabled);
+        assert_eq!(config.os_routes[0].to_string(), "192.168.1.3/32");
+
+        values.insert(OS_ROUTES.to_owned(), "0.0.0.0/0".to_owned());
+        assert!(matches!(
+            NodeConfig::from_map(&values),
+            Err(ConfigError::Invalid { key: OS_ROUTES, .. })
         ));
     }
 

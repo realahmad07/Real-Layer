@@ -9,6 +9,7 @@ pub mod error;
 pub mod health;
 pub mod mtu;
 pub mod nat;
+pub mod os_routing;
 pub mod packet;
 pub mod peer;
 pub mod pipeline;
@@ -37,6 +38,10 @@ pub use health::HealthStatus;
 pub use libp2p::Multiaddr;
 pub use mtu::{MtuError, MtuPolicy};
 pub use nat::{FlowKey, NatError, NatMapping, NatTable};
+pub use os_routing::{
+    IpPrefix, MockRouteManager, OwnedRoute, RouteError, RouteManager, RoutingPolicy,
+    WindowsRouteManager,
+};
 pub use packet::{NetworkPacket, PacketError, PacketType};
 pub use peer::{Libp2pPeerId as PeerId, NodeIdentity};
 pub use pipeline::{PacketPipeline, PipelineError};

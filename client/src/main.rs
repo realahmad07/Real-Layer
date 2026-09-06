@@ -3,8 +3,9 @@ use futures::StreamExt;
 use ghost_layer_network::{
     ConfiguredPeerDiscovery, DataPlane, DataPlaneEnvelope, DataPlaneMessageType, DiscoveryService,
     EncryptedChannel, HandshakeResponse, MtuPolicy, NetworkEvent, NetworkNode, NodeConfig,
-    NodeIdentity, PacketPipeline, RouteBinding, SessionInitiator, TunDataPlane,
-    CHANNEL_PROTOCOL_VERSION, DATA_PLANE_KIND, DEFAULT_MAXIMUM_PAYLOAD_SIZE,
+    NodeIdentity, PacketPipeline, RouteBinding, RouteManager, RoutingPolicy, SessionInitiator,
+    TunDataPlane, WindowsRouteManager, CHANNEL_PROTOCOL_VERSION, DATA_PLANE_KIND,
+    DEFAULT_MAXIMUM_PAYLOAD_SIZE,
 };
 use ghost_layer_relay::{
     CandidateRequirements, ForwardingMessage, RelayCandidate, RelayMetadataRequest, RelayRanking,
@@ -24,6 +25,21 @@ async fn main() -> Result<()> {
     let mut tun_device = open_configured_tun(&config.tun)?;
     if tun_device.is_some() {
         info!(interface = %config.tun.interface_name, "Windows TUN device opened");
+    }
+    let mut route_manager = WindowsRouteManager::new();
+    if config.os_routing_enabled {
+        if tun_device.is_none() {
+            return Err(anyhow::anyhow!(
+                "OS routing requires an available Ghost Layer TUN device"
+            ));
+        }
+        route_manager
+            .install(
+                &RoutingPolicy::Explicit(config.os_routes.clone()),
+                &config.tun.interface_name,
+            )
+            .map_err(|error| anyhow::anyhow!("install Ghost Layer OS route: {error}"))?;
+        info!(routes = ?config.os_routes, interface = %config.tun.interface_name, "Ghost Layer OS routes installed");
     }
     let discovery = ConfiguredPeerDiscovery::from_addresses(&config.bootstrap_peers)?;
     let requirements = CandidateRequirements {
@@ -328,6 +344,11 @@ async fn main() -> Result<()> {
                 event => log_event(&event),
             }
         }
+    }
+    if config.os_routing_enabled {
+        route_manager
+            .remove_owned()
+            .map_err(|error| anyhow::anyhow!("remove Ghost Layer OS routes: {error}"))?;
     }
     if let Some(device) = tun_device.as_mut() {
         device

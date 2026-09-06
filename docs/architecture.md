@@ -278,7 +278,7 @@ The destination classifier reads only IPv4/IPv6 packet headers and never resolve
 
 `DnsResolver` is an explicit mock-capable interface with request/response bounds and a timeout setting. `MockDnsResolver` is disabled unless explicitly enabled in its construction and is used only for deterministic tests. Ghost Layer does not intercept DNS, modify system DNS, or resolve arbitrary hostnames automatically. `GHOST_NAT_ENABLED` and `GHOST_DNS_ENABLED` default to false.
 
-NAT is NOT active. DNS interception is NOT active. OS routing is NOT modified, and default-route installation is NOT implemented. UDP is NOT implemented. Unrestricted Internet forwarding is NOT implemented. Production VPN behavior is NOT implemented. The existing controlled TCP allowlist and Client -> Entry -> Exit localhost test remain the only outbound path.
+NAT is NOT active. DNS interception is NOT active. OS routing is NOT modified by default, and default-route installation is rejected. UDP is NOT implemented. Unrestricted Internet forwarding is NOT implemented. Production VPN behavior is NOT implemented. The existing controlled TCP allowlist and Client -> Entry -> Exit localhost test remain the only outbound path.
 
 ## TUN/TAP Boundary
 
@@ -298,7 +298,25 @@ controlled multi-hop test path
 
 `MockTunDevice` is the deterministic implementation used by tests. It supports packet injection, reads, writes, queue-full errors, invalid/oversized packet rejection, and clean closure. `TunDataPlane` adapts this device to the existing encrypted `DataPlane`; it does not create a new encryption or forwarding path. The three-node test sends a controlled minimal IPv4 packet from Mock TUN through Client -> Entry -> Exit and writes the returned bytes to a destination Mock TUN.
 
-The Windows implementation uses the maintained `tun` Rust crate (`0.8.14`) and its Wintun backend. The adapter is compiled on Windows but requires the Wintun driver/runtime to be installed separately. `WindowsTunDevice::open` returns a structured initialization error when the driver or device is unavailable; no driver functionality is faked. The current environment has not executed a real-device test unless the manual procedure below is run with Wintun installed. Ghost Layer is not yet a production VPN and does not yet forward arbitrary Internet traffic. There is no automatic OS routing, firewall manipulation, NAT, DNS interception/tunneling, proxying, fragmentation, or public Internet access.
+The Windows implementation uses the maintained `tun` Rust crate (`0.8.14`) and its Wintun backend. When `GHOST_TUN_ENABLED=true`, `WindowsTunDevice::open` requests the configured named L3 interface, then reads bounded packets, validates them as `NetworkPacket`, enforces MTU and maximum size, writes validated return packets, and closes through the existing `TunDevice` boundary. It does not install or download a driver. If Wintun or the named interface is unavailable, opening fails with a structured error identifying the required driver/interface; no driver functionality is faked. The current environment has not executed a real-device test because no supported driver is installed. This TUN capability is not system-wide VPN routing: Ghost Layer does not add routes, capture arbitrary traffic, change interface metrics, or install a default route. NAT, DNS interception/tunneling, UDP, proxying, fragmentation, and public Internet access remain disabled.
+
+## Controlled Windows OS Routing
+
+Prompt 21 adds a disabled-by-default OS route boundary without enabling full VPN mode:
+
+```text
+explicit GHOST_OS_ROUTES
+	↓ non-default IpPrefix policy
+Windows route manager
+	↓ named Ghost Layer TUN interface only
+existing TUN -> NetworkPacket -> MTU/routing -> encrypted data plane
+```
+
+`GHOST_OS_ROUTING_ENABLED` defaults to `false`. When enabled, `GHOST_OS_ROUTES` must contain one or more explicit IPv4/IPv6 prefixes such as `192.168.1.3/32`; `0.0.0.0/0`, `::/0`, malformed prefixes, and empty route sets are rejected. The client opens the configured TUN device before attempting route installation, and route installation fails closed when the TUN is unavailable.
+
+The platform-independent `RoutingPolicy` and `RouteManager` boundaries are tested with a deterministic mock manager. The Windows implementation uses `netsh` only for explicitly configured prefixes and the configured TUN interface. It records routes successfully added by the current process, skips pre-existing matching routes, rolls back partial installation failures, and removes only its owned routes during normal shutdown. It never changes the default route, unrelated routes, interface metrics, firewall rules, proxy settings, or system-wide traffic capture. Crash recovery is limited to the ownership state available to the running process; operators should verify route state after an abnormal termination.
+
+This is controlled route plumbing, not a production VPN. A real Windows routing test requires an installed supported Wintun driver and a narrow explicitly configured route. In the current environment, the required driver is unavailable, so the real routing test is skipped. NAT remains disabled, DNS interception remains disabled, UDP remains unimplemented, and unrestricted Internet forwarding remains disabled.
 
 ### Windows manual TUN test
 
