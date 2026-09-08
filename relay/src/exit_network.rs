@@ -75,6 +75,16 @@ impl DestinationPolicy {
         }
         Ok(address)
     }
+
+    pub fn validate_udp(&self, destination: &str) -> Result<SocketAddr, ExitNetworkError> {
+        let address = self.validate(destination)?;
+        if address.ip().is_multicast()
+            || matches!(address.ip(), std::net::IpAddr::V4(ip) if ip.is_broadcast())
+        {
+            return Err(ExitNetworkError::UnsupportedAddress);
+        }
+        Ok(address)
+    }
 }
 
 pub trait ExitNetworkAdapter {

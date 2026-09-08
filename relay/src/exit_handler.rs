@@ -168,6 +168,40 @@ impl ExitPacketHandler {
             .map_err(ExitPacketHandlerError::Network)
     }
 
+    pub fn validate_bound_payload(
+        &mut self,
+        packet_id: SessionId,
+        payload: &[u8],
+        context: &ForwardingContext,
+        binding: ExitForwardingBinding,
+    ) -> Result<(), ExitPacketHandlerError> {
+        self.ensure_open()?;
+        if context.state() != ForwardingState::Forwarding {
+            return Err(ExitPacketHandlerError::InvalidForwardingState);
+        }
+        context
+            .validate_entry(binding.entry_peer)
+            .map_err(map_context_error)?;
+        context
+            .validate_exit(binding.exit_peer)
+            .map_err(map_context_error)?;
+        context
+            .validate_relay_session(binding.relay_session_id)
+            .map_err(map_context_error)?;
+        if payload.len() > self.maximum_packet_size {
+            return Err(ExitPacketHandlerError::InvalidPacket(
+                PacketError::Oversized {
+                    size: payload.len(),
+                    maximum: self.maximum_packet_size,
+                },
+            ));
+        }
+        if !self.handled_packets.insert(packet_id) {
+            return Err(ExitPacketHandlerError::DuplicatePacket);
+        }
+        Ok(())
+    }
+
     pub fn enqueue_response(
         &mut self,
         packet: NetworkPacket,

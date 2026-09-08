@@ -7,9 +7,9 @@ use ghost_layer_network::{
 };
 use ghost_layer_relay::{
     DestinationPolicy, ExitForwardingBinding, ExitNetworkAdapter, ExitPacketHandler,
-    ForwardingContext, ForwardingDirection, ForwardingMessage, ForwardingState, RelayCandidate,
-    Route, RouteSelectionPolicy, RouteSelector, TcpAdapterConfig, TcpExitNetworkAdapter,
-    FORWARDING_KIND,
+    ForwardedPacket, ForwardedProtocol, ForwardingContext, ForwardingDirection, ForwardingMessage,
+    ForwardingState, RelayCandidate, Route, RouteSelectionPolicy, RouteSelector, TcpAdapterConfig,
+    TcpExitNetworkAdapter, FORWARDING_KIND,
 };
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -283,6 +283,16 @@ async fn client_entry_exit_forwards_controlled_data_plane_message() {
                                 client_peer: client_identity.peer_id().to_string(),
                                 route: context.route().clone(),
                                 data: DataPlaneEnvelope { kind: DATA_PLANE_KIND.to_owned(), session_id: relay_session_id, frame: relay_frame },
+                                packet: Some(ForwardedPacket {
+                                    protocol: ForwardedProtocol::Tcp,
+                                    source: None,
+                                    destination: test_server_address,
+                                    flow_id: context.forwarding_id(),
+                                    session_id: context.client_session_id(),
+                                    route_id: context.forwarding_id(),
+                                    sequence: 1,
+                                    payload: incoming.payload.clone(),
+                                }),
                             };
                             entry.request_discovery(exit_identity.peer_id(), serde_json::to_vec(&forwarded).expect("encode forwarding request"));
                         }
@@ -301,6 +311,7 @@ async fn client_entry_exit_forwards_controlled_data_plane_message() {
                                 client_peer: client_identity.peer_id().to_string(),
                                 route: context.route().clone(),
                                 data: DataPlaneEnvelope { kind: DATA_PLANE_KIND.to_owned(), session_id: client_session_id, frame: client_frame },
+                                packet: response.packet.clone(),
                             }).expect("encode client response")).expect("send client response");
                         }
                         _ => {}
@@ -336,6 +347,16 @@ async fn client_entry_exit_forwards_controlled_data_plane_message() {
                         client_peer: client_identity.peer_id().to_string(),
                         route: context.route().clone(),
                         data: DataPlaneEnvelope { kind: DATA_PLANE_KIND.to_owned(), session_id: relay_session_id, frame: response_frame },
+                        packet: Some(ForwardedPacket {
+                            protocol: ForwardedProtocol::Tcp,
+                            source: None,
+                            destination: test_server_address,
+                            flow_id: context.forwarding_id(),
+                            session_id: context.client_session_id(),
+                            route_id: context.forwarding_id(),
+                            sequence: 1,
+                            payload: response_packet.as_bytes().to_vec(),
+                        }),
                     }).expect("encode exit response")).expect("send exit response");
                 },
             }

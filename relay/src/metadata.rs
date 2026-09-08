@@ -47,12 +47,26 @@ impl RelayMetadata {
     }
 
     pub fn from_state(state: &RelayState, protocol_version: String, health: RelayHealth) -> Self {
+        Self::from_state_with_capabilities(
+            state,
+            protocol_version,
+            health,
+            vec!["quic".to_owned(), "relay".to_owned()],
+        )
+    }
+
+    pub fn from_state_with_capabilities(
+        state: &RelayState,
+        protocol_version: String,
+        health: RelayHealth,
+        capabilities: Vec<String>,
+    ) -> Self {
         Self {
             peer_id: *state.peer_id(),
             protocol_version,
             software_version: state.software_version().to_owned(),
             supported_transports: vec!["quic".to_owned()],
-            capabilities: vec!["quic".to_owned(), "relay".to_owned()],
+            capabilities,
             listening_address: state.listening_address().map(str::to_owned),
             advertised_address: state.advertised_address().map(str::to_owned),
             status: state.status(),
@@ -106,7 +120,15 @@ impl RelayMetadata {
         if self.capabilities.iter().any(|capability| {
             !matches!(
                 capability.as_str(),
-                "quic" | "relay" | "one_hop" | "two_hop"
+                "quic"
+                    | "relay"
+                    | "one_hop"
+                    | "two_hop"
+                    | "tcp_exit"
+                    | "udp_exit"
+                    | "dns_forwarding"
+                    | "tun_boundary"
+                    | "health_reporting"
             )
         }) {
             return Err("relay advertised an unknown capability".to_owned());

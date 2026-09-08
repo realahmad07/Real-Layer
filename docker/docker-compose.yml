@@ -1,0 +1,62 @@
+services:
+  relay-a:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      GHOST_NETWORK_ENVIRONMENT: staging
+      GHOST_NODE_ID: relay-a
+      GHOST_LISTEN_ADDRESS: /ip4/0.0.0.0/udp/7000/quic-v1
+      GHOST_ADVERTISED_ADDRESS: /ip4/127.0.0.1/udp/7000/quic-v1
+      GHOST_IDENTITY_PATH: /var/lib/ghost-layer/identity/relay.key
+      GHOST_ROUTE_MODE: two-hop
+      GHOST_ALLOWED_EXIT_DESTINATIONS: 127.0.0.1:9005
+      GHOST_EXTERNAL_TEST_DESTINATION: 127.0.0.1:9005
+    ports:
+      - "7000:7000/udp"
+    volumes:
+      - relay-a-identity:/var/lib/ghost-layer/identity
+    restart: unless-stopped
+
+  relay-b:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      GHOST_NETWORK_ENVIRONMENT: staging
+      GHOST_NODE_ID: relay-b
+      GHOST_LISTEN_ADDRESS: /ip4/0.0.0.0/udp/7001/quic-v1
+      GHOST_ADVERTISED_ADDRESS: /ip4/127.0.0.1/udp/7001/quic-v1
+      GHOST_IDENTITY_PATH: /var/lib/ghost-layer/identity/relay.key
+      GHOST_ROUTE_MODE: two-hop
+      GHOST_ALLOWED_EXIT_DESTINATIONS: 127.0.0.1:9005
+      GHOST_EXTERNAL_TEST_DESTINATION: 127.0.0.1:9005
+    ports:
+      - "7001:7001/udp"
+    volumes:
+      - relay-b-identity:/var/lib/ghost-layer/identity
+    restart: unless-stopped
+
+  relay-c:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      GHOST_NETWORK_ENVIRONMENT: staging
+      GHOST_NODE_ID: relay-c
+      GHOST_LISTEN_ADDRESS: /ip4/0.0.0.0/udp/7002/quic-v1
+      GHOST_ADVERTISED_ADDRESS: /ip4/127.0.0.1/udp/7002/quic-v1
+      GHOST_IDENTITY_PATH: /var/lib/ghost-layer/identity/relay.key
+      GHOST_ROUTE_MODE: two-hop
+      GHOST_ALLOWED_EXIT_DESTINATIONS: 127.0.0.1:9005
+      GHOST_EXTERNAL_TEST_DESTINATION: 127.0.0.1:9005
+    ports:
+      - "7002:7002/udp"
+    volumes:
+      - relay-c-identity:/var/lib/ghost-layer/identity
+    restart: unless-stopped
+
+volumes:
+  relay-a-identity:
+  relay-b-identity:
+  relay-c-identity:

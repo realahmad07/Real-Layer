@@ -8,9 +8,11 @@ use ghost_layer_network::{
     DEFAULT_MAXIMUM_PAYLOAD_SIZE,
 };
 use ghost_layer_relay::{
-    CandidateRequirements, ForwardingMessage, RelayCandidate, RelayMetadataRequest, RelayRanking,
-    Route, RouteSelectionPolicy, RouteSelector, FORWARDING_KIND,
+    CandidateRequirements, ForwardedPacket, ForwardedProtocol, ForwardingMessage, RelayCandidate,
+    RelayMetadataRequest, RelayRanking, Route, RouteSelectionPolicy, RouteSelector,
+    FORWARDING_KIND,
 };
+use std::net::SocketAddr;
 use std::time::SystemTime;
 use tracing::{error, info, warn};
 
@@ -106,7 +108,9 @@ async fn main() -> Result<()> {
                                         .map_err(|error| {
                                             anyhow::anyhow!("open encrypted channel: {error}")
                                         })?;
-                                        let envelope = if let Some(device) = tun_device.as_mut() {
+                                        let (envelope, protocol_payload) = if let Some(device) =
+                                            tun_device.as_mut()
+                                        {
                                             let mut data_plane = DataPlane::open(
                                                 &mut channel,
                                                 DEFAULT_MAXIMUM_PAYLOAD_SIZE,
@@ -135,20 +139,25 @@ async fn main() -> Result<()> {
                                                 })?,
                                                 &mut data_plane,
                                             );
-                                            pipeline.send(packet.as_bytes().to_vec()).map_err(
+                                            let payload = packet.as_bytes().to_vec();
+                                            let envelope = pipeline.send(payload.clone()).map_err(
                                                 |error| {
                                                     anyhow::anyhow!("route TUN packet: {error}")
                                                 },
-                                            )?
+                                            )?;
+                                            (envelope, Some(payload))
                                         } else {
-                                            let payload =
-                                                if config.external_test_destination.is_some()
-                                                    && matches!(route, RouteBinding::TwoHop { .. })
-                                                {
-                                                    b"ghost-layer-external-test".as_slice()
-                                                } else {
-                                                    b"hello ghost layer".as_slice()
-                                                };
+                                            let payload = if config.udp_enabled {
+                                                b"hello ghost layer udp".to_vec()
+                                            } else if config.dns_enabled {
+                                                dns_query("ghost-layer.test")
+                                            } else if config.external_test_destination.is_some()
+                                                && matches!(route, RouteBinding::TwoHop { .. })
+                                            {
+                                                b"ghost-layer-external-test".to_vec()
+                                            } else {
+                                                b"hello ghost layer".to_vec()
+                                            };
                                             let frame = DataPlane::open(
                                                 &mut channel,
                                                 DEFAULT_MAXIMUM_PAYLOAD_SIZE,
@@ -156,22 +165,37 @@ async fn main() -> Result<()> {
                                             .map_err(|error| {
                                                 anyhow::anyhow!("open data plane: {error}")
                                             })?
-                                            .send(payload)
+                                            .send(&payload)
                                             .map_err(|error| {
                                                 anyhow::anyhow!(
                                                     "encrypt data-plane payload: {error}"
                                                 )
                                             })?;
-                                            DataPlaneEnvelope {
-                                                kind: DATA_PLANE_KIND.to_owned(),
-                                                session_id,
-                                                frame,
-                                            }
+                                            (
+                                                DataPlaneEnvelope {
+                                                    kind: DATA_PLANE_KIND.to_owned(),
+                                                    session_id,
+                                                    frame,
+                                                },
+                                                Some(payload.to_vec()),
+                                            )
                                         };
-                                        node.request_discovery(
-                                            peer,
-                                            serde_json::to_vec(&envelope)?,
-                                        );
+                                        let request_payload =
+                                            if matches!(route, RouteBinding::TwoHop { .. })
+                                                && (config.udp_enabled || config.dns_enabled)
+                                            {
+                                                serde_json::to_vec(&build_protocol_request(
+                                                    &config,
+                                                    &route,
+                                                    session_id,
+                                                    peer_id,
+                                                    protocol_payload.expect("protocol payload"),
+                                                    envelope,
+                                                )?)?
+                                            } else {
+                                                serde_json::to_vec(&envelope)?
+                                            };
+                                        node.request_discovery(peer, request_payload);
                                         active_channel = Some(channel);
                                         active_route = Some(route);
                                         info!(session_id = %session_id, "encrypted channel established; sending protocol Ping");
@@ -228,6 +252,43 @@ async fn main() -> Result<()> {
                                             if message.payload == b"ghost-layer-external-test" =>
                                         {
                                             info!(session_id = %forwarded.client_session_id, "external TCP echo received through entry and exit");
+                                            channel.close().map_err(|error| {
+                                                anyhow::anyhow!("close encrypted channel: {error}")
+                                            })?;
+                                            break;
+                                        }
+                                        Ok(message)
+                                            if matches!(
+                                                forwarded
+                                                    .packet
+                                                    .as_ref()
+                                                    .map(|packet| packet.protocol),
+                                                Some(
+                                                    ForwardedProtocol::Udp | ForwardedProtocol::Dns
+                                                )
+                                            ) =>
+                                        {
+                                            if forwarded.packet.as_ref().is_some_and(|packet| {
+                                                packet.protocol == ForwardedProtocol::Udp
+                                            }) && message.payload
+                                                != b"ack: hello ghost layer udp"
+                                            {
+                                                return Err(anyhow::anyhow!(
+                                                    "unexpected UDP response payload"
+                                                ));
+                                            }
+                                            if forwarded.packet.as_ref().is_some_and(|packet| {
+                                                packet.protocol == ForwardedProtocol::Dns
+                                            }) && !message
+                                                .payload
+                                                .windows(4)
+                                                .any(|window| window == [127, 0, 0, 1])
+                                            {
+                                                return Err(anyhow::anyhow!(
+                                                    "unexpected DNS response payload"
+                                                ));
+                                            }
+                                            info!(session_id = %forwarded.client_session_id, protocol = ?forwarded.packet.as_ref().map(|packet| packet.protocol), response_size = message.payload.len(), "protocol response received through entry and exit");
                                             channel.close().map_err(|error| {
                                                 anyhow::anyhow!("close encrypted channel: {error}")
                                             })?;
@@ -377,6 +438,73 @@ fn open_configured_tun(
             "Windows TUN support is unavailable on this platform"
         ))
     }
+}
+
+fn build_protocol_request(
+    config: &NodeConfig,
+    route: &RouteBinding,
+    session_id: ghost_layer_network::SessionId,
+    client_peer: ghost_layer_network::PeerId,
+    payload: Vec<u8>,
+    envelope: DataPlaneEnvelope,
+) -> Result<ForwardingMessage> {
+    let RouteBinding::TwoHop { .. } = route else {
+        return Err(anyhow::anyhow!(
+            "protocol forwarding requires a two-hop route"
+        ));
+    };
+    let (protocol, destination, source) = if config.udp_enabled {
+        let destination = config
+            .allowed_exit_destinations
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("UDP forwarding requires an allowlisted destination"))?
+            .parse::<SocketAddr>()?;
+        (
+            ForwardedProtocol::Udp,
+            destination,
+            Some(SocketAddr::from(([127, 0, 0, 1], 40000))),
+        )
+    } else if config.dns_enabled {
+        (
+            ForwardedProtocol::Dns,
+            config
+                .dns_server
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("DNS server is not configured"))?
+                .parse::<SocketAddr>()?,
+            None,
+        )
+    } else {
+        return Err(anyhow::anyhow!("no protocol forwarding mode is enabled"));
+    };
+    Ok(ForwardingMessage {
+        kind: FORWARDING_KIND.to_owned(),
+        forwarding_id: session_id,
+        client_session_id: session_id,
+        client_peer: client_peer.to_string(),
+        route: route.clone(),
+        data: envelope,
+        packet: Some(ForwardedPacket {
+            protocol,
+            source,
+            destination,
+            flow_id: session_id,
+            session_id,
+            route_id: session_id,
+            sequence: 1,
+            payload,
+        }),
+    })
+}
+
+fn dns_query(name: &str) -> Vec<u8> {
+    let mut query = vec![0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
+    for label in name.split('.') {
+        query.push(label.len() as u8);
+        query.extend_from_slice(label.as_bytes());
+    }
+    query.extend_from_slice(&[0, 0, 1, 0, 1]);
+    query
 }
 
 fn log_route(route: &Route) {

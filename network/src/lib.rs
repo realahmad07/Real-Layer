@@ -23,7 +23,9 @@ pub use channel::{
     ChannelEnvelope, ChannelError, ChannelMessage, ChannelState, EncryptedChannel,
     CHANNEL_PROTOCOL_VERSION,
 };
-pub use config::{LogLevel, NetworkEnvironment, NodeConfig, RouteMode, TunConfig};
+pub use config::{
+    LogLevel, NetworkEnvironment, NodeConfig, RelayResourceLimits, RelayRole, RouteMode, TunConfig,
+};
 pub use data_plane::{
     DataPlane, DataPlaneEnvelope, DataPlaneError, DataPlaneMessage, DataPlaneMessageType,
     DATA_PLANE_KIND, DATA_PLANE_PROTOCOL_VERSION, DEFAULT_MAXIMUM_PAYLOAD_SIZE,
@@ -32,7 +34,9 @@ pub use discovery::{
     ConfiguredPeerDiscovery, DiscoveryRequestId, DiscoveryResponseChannel, DiscoveryService,
     RelayDiscoveryCodec, RelayDiscoveryProtocol,
 };
-pub use dns::{DnsError, DnsLimits, DnsResolver, MockDnsResolver};
+pub use dns::{
+    DnsError, DnsLimits, DnsQuery, DnsRecordType, DnsResolver, MockDnsResolver, UdpDnsResolver,
+};
 pub use error::ConfigError;
 pub use health::HealthStatus;
 pub use libp2p::Multiaddr;

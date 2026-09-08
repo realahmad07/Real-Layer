@@ -71,4 +71,13 @@ mod tests {
         assert_eq!(first_peer, second.peer_id());
         let _ = std::fs::remove_file(path);
     }
+
+    #[test]
+    fn invalid_identity_fails_without_generating_a_replacement() {
+        let path =
+            std::env::temp_dir().join(format!("ghost-layer-invalid-{}.key", std::process::id()));
+        std::fs::write(&path, b"not-a-libp2p-key").expect("write invalid identity");
+        assert!(NodeIdentity::load_or_generate(&path).is_err());
+        let _ = std::fs::remove_file(path);
+    }
 }

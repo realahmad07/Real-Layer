@@ -6,6 +6,14 @@
 .env.*
 !.env.example
 
+# Relay and client private material
+*.key
+*.pem
+*.p12
+secrets/
+credentials/
+identity/
+
 # Editor and OS files
 .vscode/
 .idea/

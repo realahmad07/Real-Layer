@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FlowKey {
+    pub flow_id: SessionId,
     pub source: SocketAddr,
     pub destination: SocketAddr,
     pub session_id: SessionId,
@@ -17,6 +18,7 @@ pub struct FlowKey {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NatMapping {
+    pub flow_id: SessionId,
     pub source: SocketAddr,
     pub destination: SocketAddr,
     pub translated: SocketAddr,
@@ -84,6 +86,7 @@ impl NatTable {
         }
         let translated = self.allocate_port()?;
         let mapping = NatMapping {
+            flow_id: key.flow_id,
             source: key.source,
             destination: key.destination,
             translated,
@@ -184,6 +187,7 @@ mod tests {
 
     fn key(session_id: SessionId, source_port: u16) -> FlowKey {
         FlowKey {
+            flow_id: SessionId::generate(),
             source: SocketAddr::from(([10, 0, 0, 1], source_port)),
             destination: SocketAddr::from(([198, 51, 100, 1], 443)),
             session_id,

@@ -1,5 +1,9 @@
 # Ghost Layer Architecture
 
+Ghost Layer is currently deployed as a controlled networking system. Blockchain coordination, staking, rewards, reputation, and DePIN settlement are intentionally not part of this deployment stage.
+
+Production deployment keeps the existing libp2p + QUIC architecture: each relay is an independent process with a persistent Ed25519 identity, configurable bind and advertised multiaddrs, explicit bootstrap peers, bounded resources, exact exit policy, structured logs, and lifecycle-aware health. See [deployment.md](deployment.md) for the reproducible Docker and VPS procedures.
+
 Ghost Layer is intended to provide censorship-resistant network access through independently operated relay nodes. The MVP foundation defines boundaries and shared interfaces; it does not claim anonymity, production security, or a complete VPN/tunneling implementation.
 
 ## Control Plane
@@ -38,7 +42,7 @@ health / heartbeat
 future MagicBlock coordination
 ```
 
-Relay metadata advertises only currently implemented capabilities: QUIC and the relay node itself. One-hop and two-hop routing are intentionally absent from the capability list because routing is not implemented.
+Relay metadata advertises capabilities derived from the enabled runtime: QUIC, relay health reporting, configured one-hop/two-hop routing, and only the enabled TCP, UDP, DNS, and TUN boundaries.
 
 `RelayRegistry` is a trait with register, update, get, and remove operations. The current `InMemoryRelayRegistry` is dependency-free and is used as the local implementation. A future decentralized or Solana-backed registry should replace it without changing relay business logic:
 
@@ -88,7 +92,7 @@ Existing libp2p network
 
 Relays answer the versioned `/ghost-layer/relay-discovery/1.0.0` libp2p request/response protocol. A request contains the expected protocol version; a compatible relay responds with serde JSON metadata containing its PeerId, protocol and software versions, QUIC transport, implemented capabilities, listening/advertised address, status, local health class, latest measured Ping latency, metadata timestamp, and heartbeat timestamp. The protocol carries metadata only, never user traffic, secrets, or payload contents.
 
-Only `quic` and `relay` are advertised today. `one_hop` and `two_hop` are intentionally absent because route selection and forwarding are not implemented.
+Capability advertisements are versioned with the discovery protocol and are limited to functionality actually enabled by local configuration. Unsupported capability names are rejected during candidate validation.
 
 ### Candidate validation and filtering
 
@@ -246,7 +250,7 @@ local test server
 
 `TcpExitNetworkAdapter` uses Rust TCP primitives with bounded request and response sizes, connection/read/write timeouts, and clean shutdown. The Exit Packet Handler invokes it only after validating the client session, selected route, Entry and Exit identities, relay session, forwarding state, and duplicate packet identity. The response is validated back into `NetworkPacket` before returning through Entry. The integration test uses a deterministic local TCP server as the explicitly configured destination; the same policy can hold a controlled external test address without adding an unrestricted proxy.
 
-This adapter is a controlled test boundary, not a proxy. UDP, NAT, DNS, route installation, arbitrary sockets, unrestricted Internet forwarding, and production VPN behavior remain future work. The Exit Packet Handler and adapter intentionally have no capability to send traffic outside the explicit test allowlist. `GHOST_ALLOWED_EXIT_DESTINATIONS` configures literal `IP:PORT` entries and defaults to an empty list.
+This adapter is a controlled test boundary, not a proxy. UDP, NAT, DNS, route installation, arbitrary sockets, unrestricted Internet forwarding, and production VPN behavior remain disabled by default. The Exit Packet Handler and adapters intentionally have no capability to send traffic outside the explicit test allowlist. `GHOST_ALLOWED_EXIT_DESTINATIONS` configures literal `IP:PORT` entries and defaults to an empty list.
 
 ## Controlled External TCP Exit
 
@@ -284,9 +288,15 @@ The destination classifier reads only IPv4/IPv6 packet headers and never resolve
 
 `MtuPolicy` owns the configured tunnel MTU and maximum packet size. It rejects empty, malformed, and oversized packets, preserves bytes within the limit, and does not fragment or truncate. `NatTable` and `ReturnPathTable` are bounded in-memory state models with deterministic allocation, reverse lookup, expiration, duplicate detection, and cleanup. They do not modify OS NAT state, expose the machine as a gateway, or forward return traffic.
 
-`DnsResolver` is an explicit mock-capable interface with request/response bounds and a timeout setting. `MockDnsResolver` is disabled unless explicitly enabled in its construction and is used only for deterministic tests. Ghost Layer does not intercept DNS, modify system DNS, or resolve arbitrary hostnames automatically. `GHOST_NAT_ENABLED` and `GHOST_DNS_ENABLED` default to false.
+`DnsResolver` is an explicit bounded interface. `MockDnsResolver` remains available for deterministic tests, while `UdpDnsResolver` sends only a validated DNS wire query to the explicitly configured `GHOST_DNS_SERVER` IP:PORT, correlates the transaction ID, bounds packets, enforces timeouts, and rejects malformed or mismatched responses. It supports A/AAAA query types and DNS success/NXDOMAIN/SERVFAIL response classes without resolving arbitrary exit destinations locally. `GHOST_DNS_ENABLED` defaults to false and requires an explicit DNS server; Ghost Layer does not modify Windows DNS settings, so OS-level DNS interception remains environment-limited.
 
-NAT is NOT active. DNS interception is NOT active. OS routing is NOT modified by default, and default-route installation is rejected. UDP is NOT implemented. Unrestricted Internet forwarding is NOT implemented. Production VPN behavior is NOT implemented. The existing controlled TCP allowlist and Client -> Entry -> Exit localhost test remain the only outbound path.
+NAT is NOT active by default. DNS transport and UDP adapter boundaries are implemented but disabled by default. OS routing is NOT modified by default, and default-route installation is rejected. Unrestricted Internet forwarding is NOT implemented. Production VPN mode is not real-device tested because the supported Windows TUN driver is unavailable. The existing controlled TCP allowlist and Client -> Entry -> Exit iPhone regression remain the verified outbound path.
+
+## DNS, UDP, and VPN Mode Boundaries
+
+Prompt 24 adds explicit DNS query validation and an opt-in UDP DNS transport. Prompt 25 adds `UdpExitNetworkAdapter`, which reuses `DestinationPolicy`, rejects unspecified/multicast/broadcast destinations, bounds datagrams, applies read/write timeouts, and has deterministic localhost coverage. Neither component is enabled by default, and neither creates a direct Exit-to-Client path.
+
+Prompt 26 adds conservative configuration validation through `GHOST_VPN_MODE`, `GHOST_TUN_ENABLED`, `GHOST_OS_ROUTING_ENABLED`, `GHOST_NAT_ENABLED`, `GHOST_DNS_ENABLED`, and `GHOST_UDP_ENABLED`, all defaulting to `false`. VPN mode requires an enabled TUN and explicit non-default OS routes. A complete real full-VPN packet loop remains environment-blocked until a supported Windows TUN driver is available; mock protocol tests and the existing encrypted TCP/iPhone path remain the authoritative automated coverage. No default route, DNS system change, NAT activation, UDP Internet forwarding, or unrestricted destination fallback is performed.
 
 ## TUN/TAP Boundary
 
@@ -324,7 +334,7 @@ existing TUN -> NetworkPacket -> MTU/routing -> encrypted data plane
 
 The platform-independent `RoutingPolicy` and `RouteManager` boundaries are tested with a deterministic mock manager. The Windows implementation uses `netsh` only for explicitly configured prefixes and the configured TUN interface. It records routes successfully added by the current process, skips pre-existing matching routes, rolls back partial installation failures, and removes only its owned routes during normal shutdown. It never changes the default route, unrelated routes, interface metrics, firewall rules, proxy settings, or system-wide traffic capture. Crash recovery is limited to the ownership state available to the running process; operators should verify route state after an abnormal termination.
 
-This is controlled route plumbing, not a production VPN. A real Windows routing test requires an installed supported Wintun driver and a narrow explicitly configured route. In the current environment, the required driver is unavailable, so the real routing test is skipped. NAT remains disabled, DNS interception remains disabled, UDP remains unimplemented, and unrestricted Internet forwarding remains disabled.
+This is controlled route plumbing, not a production VPN. A real Windows routing test requires an installed supported Wintun driver and a narrow explicitly configured route. In the current environment, the required driver is unavailable, so the real routing test is skipped. NAT, DNS interception, and UDP remain disabled by default, and unrestricted Internet forwarding remains disabled.
 
 ### Windows manual TUN test
 
@@ -355,7 +365,76 @@ cargo run -p ghost-layer-client
 
 The client log should show `connection established`, `peer identified`, and `ping result`. The relay log should show the corresponding connection and identification events.
 
+## Prompt 24-26B Runtime Status
+
+The live relay validates one typed forwarding envelope and dispatches it by `ForwardedProtocol`:
+
+```text
+ForwardedPacket
+	↓
+Entry → encrypted Entry/Exit session → unified Exit dispatcher
+	├── TcpExitNetworkAdapter
+	├── UdpExitNetworkAdapter → bounded NatTable
+	└── UdpDnsResolver → explicit GHOST_DNS_SERVER
+	↓
+encrypted Exit → Entry → Client return path
+```
+
+Session, route, Entry, Exit, packet bounds, payload equality, and strictly increasing flow
+sequence are checked before dispatch. TCP remains restricted to the exact configured IP:PORT.
+UDP requires `GHOST_UDP_ENABLED=true` and `GHOST_NAT_ENABLED=true`; mappings are bounded,
+session/identity/Entry/Exit/protocol-bound, expired on heartbeat, and removed on shutdown. DNS
+requires `GHOST_DNS_ENABLED=true` and an explicit `GHOST_DNS_SERVER`; it validates the wire
+transaction and never falls back to the host resolver. Missing metadata, unknown protocols,
+invalid destinations, duplicate sequences, and disabled features fail closed. Responses return
+through the authenticated Exit → Entry → Client path; no direct Exit-to-Client socket exists.
+
+Implemented: unified Exit dispatch, typed metadata validation, live UDP adapter/NAT binding,
+explicit DNS dispatch, bounded return envelopes, and controlled TCP regression.
+
+Tested: workspace unit tests, the encrypted multi-hop TCP return path, bounded UDP/DNS adapters,
+and NAT/return-path state models.
+
+Environment-blocked: real Windows TUN requires a supported Wintun driver and named interface.
+Runtime DNS tunneling is implemented and tested, but OS-level DNS interception is not implemented.
+Mock TUN protocol-specific UDP/DNS E2E remains separate from the process-level client/relay tests.
+
+Not implemented: unrestricted Internet forwarding, default routes, transparent proxying, DNS
+fallback, firewall changes, and direct Exit-to-Client return traffic.
+
 ## Solana Layer
+
+## Production Relay Architecture
+
+`RelayCore` is the local ownership boundary around the existing relay runtime. It owns the
+persistent public identity reference, lifecycle, bounded peer/session/flow admission, metrics,
+capabilities, and the operational snapshot consumed by future coordination interfaces. The
+private Ed25519 key remains inside `NodeIdentity`; it is never logged or included in operational
+state.
+
+The runtime lifecycle is deterministic:
+
+```text
+Starting → Discovering → Ready → Draining → ShuttingDown → Stopped
+```
+
+`ConnectionManager`, `SessionManager`, and `ForwardingManager` provide explicit library
+boundaries for connection records, authenticated route-bound sessions, and forwarding-context
+ownership. They wrap policy around the existing libp2p/QUIC, secure-session, encrypted-channel,
+and `ForwardingContext` implementations; they do not create alternate transports or encryption.
+
+`RelayResourceLimits` provides conservative environment-configurable limits for connected peers,
+active sessions, active forwarding flows, queued packets, exit connections, session timeout, and
+flow timeout. Admission rejects deterministically when a limit is reached. Shutdown transitions
+the relay to Draining, stops new work, cleans NAT/session/forwarding state, clears channels, and
+is idempotent at the lifecycle boundary.
+
+`RelayMetrics` tracks counts and byte totals without payload logging. `RelayOperationalState`
+contains only public operational data: identity, versions, capabilities, readiness, uptime,
+capacity counters, and metrics. It is an internal interface for a future coordination layer.
+Blockchain coordination is intentionally outside the relay packet/data plane. Future Solana or
+MagicBlock integration may consume `RelayOperationalState`, but must never handle user traffic,
+keys, session material, or packet payloads.
 
 Future Solana/Anchor programs will provide decentralized network registration, staking, rewards, and settlement. Programs should store and settle control-plane state only. They must not receive or persist user traffic or payload data.
 

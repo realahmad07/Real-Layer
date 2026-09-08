@@ -1,8 +1,28 @@
 use ghost_layer_network::{DataPlaneEnvelope, PeerId, RouteBinding, SessionId};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::net::SocketAddr;
 
 pub const FORWARDING_KIND: &str = "ghost_layer_forwarding";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ForwardedProtocol {
+    Tcp,
+    Udp,
+    Dns,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardedPacket {
+    pub protocol: ForwardedProtocol,
+    pub source: Option<SocketAddr>,
+    pub destination: SocketAddr,
+    pub flow_id: SessionId,
+    pub session_id: SessionId,
+    pub route_id: SessionId,
+    pub sequence: u64,
+    pub payload: Vec<u8>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hop {
@@ -34,6 +54,8 @@ pub struct ForwardingMessage {
     pub client_peer: String,
     pub route: RouteBinding,
     pub data: DataPlaneEnvelope,
+    #[serde(default)]
+    pub packet: Option<ForwardedPacket>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +78,7 @@ pub enum ForwardingError {
     ExitSessionClosed,
     AuthenticationFailed,
     SequenceViolation,
+    UnsupportedProtocol,
     ForwardingTimeout,
     Backpressure,
     UnexpectedProtocolMessage,
@@ -90,6 +113,7 @@ pub struct ForwardingContext {
     state: ForwardingState,
     relay_session_id: Option<SessionId>,
     last_request: Option<(SessionId, ForwardingDirection)>,
+    last_sequence: Option<u64>,
 }
 
 impl ForwardingContext {
@@ -136,6 +160,7 @@ impl ForwardingContext {
             state: ForwardingState::Created,
             relay_session_id: None,
             last_request: None,
+            last_sequence: None,
         })
     }
 
@@ -289,6 +314,39 @@ impl ForwardingContext {
         if message.data.kind != ghost_layer_network::DATA_PLANE_KIND {
             return Err(ForwardingError::UnexpectedProtocolMessage);
         }
+        let packet = message
+            .packet
+            .as_ref()
+            .ok_or(ForwardingError::MalformedForwardingMessage)?;
+        self.validate_packet(packet)?;
+        Ok(())
+    }
+
+    pub fn validate_packet(&self, packet: &ForwardedPacket) -> Result<(), ForwardingError> {
+        if packet.session_id != self.client_session_id
+            || packet.route_id != self.forwarding_id
+            || packet.flow_id != self.forwarding_id
+            || packet.payload.len() > ghost_layer_network::DEFAULT_MAXIMUM_PAYLOAD_SIZE
+        {
+            return Err(ForwardingError::InvalidForwardingContext);
+        }
+        if packet.sequence == 0 {
+            return Err(ForwardingError::SequenceViolation);
+        }
+        if packet.destination.port() == 0 {
+            return Err(ForwardingError::MalformedForwardingMessage);
+        }
+        if matches!(packet.protocol, ForwardedProtocol::Udp) && packet.source.is_none() {
+            return Err(ForwardingError::MalformedForwardingMessage);
+        }
+        Ok(())
+    }
+
+    pub fn accept_sequence(&mut self, sequence: u64) -> Result<(), ForwardingError> {
+        if sequence == 0 || self.last_sequence.is_some_and(|last| sequence <= last) {
+            return Err(ForwardingError::SequenceViolation);
+        }
+        self.last_sequence = Some(sequence);
         Ok(())
     }
 
@@ -396,6 +454,16 @@ mod tests {
     #[test]
     fn forwarding_message_requires_context_and_data_plane_kind() {
         let context = context();
+        let packet = ForwardedPacket {
+            protocol: ForwardedProtocol::Tcp,
+            source: None,
+            destination: "192.168.1.3:9005".parse().unwrap(),
+            flow_id: context.forwarding_id(),
+            session_id: context.client_session_id(),
+            route_id: context.forwarding_id(),
+            sequence: 1,
+            payload: b"hello".to_vec(),
+        };
         let message = ForwardingMessage {
             kind: FORWARDING_KIND.to_owned(),
             forwarding_id: context.forwarding_id(),
@@ -407,6 +475,7 @@ mod tests {
                 session_id: SessionId::generate(),
                 frame: vec![1, 2, 3],
             },
+            packet: Some(packet),
         };
         assert!(context.validate_message(&message).is_ok());
         assert_eq!(
@@ -418,6 +487,44 @@ mod tests {
         assert_eq!(
             context.validate_message(&malformed),
             Err(ForwardingError::MalformedForwardingMessage)
+        );
+    }
+
+    #[test]
+    fn protocol_aware_packet_round_trips_and_binding_is_checked() {
+        let context = context();
+        let packet = ForwardedPacket {
+            protocol: ForwardedProtocol::Tcp,
+            source: None,
+            destination: "192.168.1.3:9005".parse().unwrap(),
+            flow_id: context.forwarding_id(),
+            session_id: context.client_session_id(),
+            route_id: context.forwarding_id(),
+            sequence: 1,
+            payload: b"ghost-layer-external-test".to_vec(),
+        };
+        let encoded = serde_json::to_vec(&packet).unwrap();
+        let decoded: ForwardedPacket = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, packet);
+        let message = ForwardingMessage {
+            kind: FORWARDING_KIND.to_owned(),
+            forwarding_id: context.forwarding_id(),
+            client_session_id: context.client_session_id(),
+            client_peer: context.client_peer().to_string(),
+            route: context.route().clone(),
+            data: DataPlaneEnvelope {
+                kind: ghost_layer_network::DATA_PLANE_KIND.to_owned(),
+                session_id: SessionId::generate(),
+                frame: vec![1],
+            },
+            packet: Some(packet),
+        };
+        assert!(context.validate_message(&message).is_ok());
+        let mut wrong = message;
+        wrong.packet.as_mut().unwrap().session_id = SessionId::generate();
+        assert_eq!(
+            context.validate_message(&wrong),
+            Err(ForwardingError::InvalidForwardingContext)
         );
     }
 }

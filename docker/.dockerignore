@@ -1,0 +1,11 @@
+.git
+.github
+target
+**/*.key
+**/*.pem
+**/*.p12
+.env
+.env.*
+!.env.example
+docker-compose*.yml
+README.md
