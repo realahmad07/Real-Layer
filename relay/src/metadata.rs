@@ -124,6 +124,8 @@ impl RelayMetadata {
                     | "relay"
                     | "one_hop"
                     | "two_hop"
+                    | "entry_role"
+                    | "exit_role"
                     | "tcp_exit"
                     | "udp_exit"
                     | "dns_forwarding"
