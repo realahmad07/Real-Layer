@@ -716,13 +716,14 @@ mod tests {
 
     #[test]
     fn live_health_response_is_valid_http() {
-        let response = http_response(200, "{\"alive\":true}");
+        let body = "{\"alive\":true}";
+        let response = http_response(200, body);
         let text = String::from_utf8(response).expect("http response should be utf-8");
 
         assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(text.contains("Content-Type: application/json"));
-        assert!(text.contains("Content-Length: 16"));
-        assert!(text.contains("{\"alive\":true}"));
+        assert!(text.contains(&format!("Content-Length: {}", body.len())));
+        assert!(text.contains(body));
     }
 }
 
