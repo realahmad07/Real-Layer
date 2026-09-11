@@ -19,6 +19,95 @@ use std::sync::Arc;
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "android")]
+extern "C" {
+    fn __android_log_print(
+        priority: libc::c_int,
+        tag: *const libc::c_char,
+        format: *const libc::c_char,
+        ...,
+    ) -> libc::c_int;
+}
+
+#[cfg(target_os = "android")]
+fn log_jni_entered(fd: i32, running: bool) {
+    unsafe {
+        __android_log_print(
+            4,
+            b"REAL_LAYER_JNI\0".as_ptr().cast(),
+            b"JNI_STARTCORE_ENTERED fd=%d running=%d\0".as_ptr().cast(),
+            fd,
+            running as libc::c_int,
+        );
+    }
+}
+
+#[cfg(target_os = "android")]
+fn log_jni_already_running(fd: i32) {
+    unsafe {
+        __android_log_print(
+            4,
+            b"REAL_LAYER_JNI\0".as_ptr().cast(),
+            b"JNI_STARTCORE_ALREADY_RUNNING fd=%d\0".as_ptr().cast(),
+            fd,
+        );
+    }
+}
+
+#[cfg(target_os = "android")]
+fn log_jni_running_set(fd: i32) {
+    unsafe {
+        __android_log_print(
+            4,
+            b"REAL_LAYER_JNI\0".as_ptr().cast(),
+            b"JNI_STARTCORE_RUNNING_SET fd=%d\0".as_ptr().cast(),
+            fd,
+        );
+    }
+}
+
+#[cfg(target_os = "android")]
+struct OwnedTunFile {
+    file: File,
+    fd: i32,
+}
+
+#[cfg(target_os = "android")]
+impl OwnedTunFile {
+    fn from_duplicated_fd(fd: i32, original_fd: i32, label: &str) -> Self {
+        println!("VPN_FD_RUST_OWNED label={} original={} fd={}", label, original_fd, fd);
+        Self {
+            file: unsafe { File::from_raw_fd(fd) },
+            fd,
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+impl Drop for OwnedTunFile {
+    fn drop(&mut self) {
+        println!("VPN_FD_RUST_CLOSE fd={}", self.fd);
+    }
+}
+
+#[cfg(target_os = "android")]
+impl Read for OwnedTunFile {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.file.read(buffer)
+    }
+}
+
+#[cfg(target_os = "android")]
+impl Write for OwnedTunFile {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.file.write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+#[cfg(target_os = "android")]
 fn format_ipv4(bytes: &[u8]) -> String {
     if bytes.len() < 4 {
         return "invalid".to_string();
@@ -36,6 +125,7 @@ fn format_ipv6(bytes: &[u8]) -> String {
     }
     let mut groups = Vec::new();
     for chunk in bytes.chunks(2) {
+        #[cfg(target_os = "android")]
         groups.push(format!("{:02x}{:02x}", chunk[0], chunk[1]));
     }
     groups.join(":")
@@ -99,14 +189,22 @@ pub extern "system" fn Java_com_example_magicblock_1app_RealLayerVpnService_star
     _class: JClass,
     fd: i32,
 ) {
+    log_jni_entered(fd, RUNNING.load(Ordering::SeqCst));
+    println!(
+        "VPN_JNI_STARTCORE_ENTERED fd={} running={}",
+        fd,
+        RUNNING.load(Ordering::SeqCst)
+    );
     if RUNNING.load(Ordering::SeqCst) {
-        println!("Native VPN Core is already running.");
+        log_jni_already_running(fd);
+        println!("VPN_JNI_STARTCORE_ALREADY_RUNNING fd={}", fd);
         return;
     }
     RUNNING.store(true, Ordering::SeqCst);
+    log_jni_running_set(fd);
     println!("VPN_RUST_START fd={}", fd);
     println!("Native VPN Core started with TUN fd: {}", fd);
-    println!("VPN_TUN_LOOP_STARTED fd={}", fd);
+    println!("VPN_FD_ORIGINAL fd={}", fd);
 
     thread::spawn(move || {
         // Android still owns the original ParcelFileDescriptor from VpnService.
@@ -119,8 +217,11 @@ pub extern "system" fn Java_com_example_magicblock_1app_RealLayerVpnService_star
             return;
         }
 
-        let mut read_file = unsafe { std::fs::File::from_raw_fd(fd_read) };
-        let mut write_file = unsafe { std::fs::File::from_raw_fd(fd_write) };
+        println!("VPN_FD_DUP_READ original={} duplicate={}", fd, fd_read);
+        println!("VPN_FD_DUP_WRITE original={} duplicate={}", fd, fd_write);
+
+        let mut read_file = OwnedTunFile::from_duplicated_fd(fd_read, fd, "read");
+        let mut write_file = OwnedTunFile::from_duplicated_fd(fd_write, fd, "write");
 
         let (tun_tx_in, tun_rx_in) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
         let (tun_tx_out, mut tun_rx_out) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
@@ -150,7 +251,6 @@ pub extern "system" fn Java_com_example_magicblock_1app_RealLayerVpnService_star
             }
         });
 
-        // Write thread
         let write_running = Arc::new(AtomicBool::new(true));
         let write_running_clone = write_running.clone();
         thread::spawn(move || {

@@ -59,13 +59,32 @@ pub async fn run_client(mut tun_rx: Option<tokio::sync::mpsc::UnboundedReceiver<
         tokio::select! {
             Some(packet) = async { if let Some(rx) = tun_rx.as_mut() { rx.recv().await } else { futures::future::pending().await } } => {
                 if let (Some(channel), Some(route), Some(exit)) = (active_channel.as_mut(), active_route.as_ref(), exit_peer.as_ref()) {
-                    if let Ok(mut data_plane) = DataPlane::open(channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE) {
-                        if let Ok(frame) = data_plane.send(&packet) {
-                            let session_id = current_session_id.unwrap();
+                    let session_id = current_session_id.unwrap();
+                    let packet_length = packet.len();
+                    let envelope = match DataPlane::open(channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE) {
+                        Ok(mut data_plane) => match MtuPolicy::new(config.tun.mtu, config.tun.maximum_packet_size) {
+                            Ok(mtu) => match PacketPipeline::new(mtu, &mut data_plane).send(packet.clone()) {
+                                Ok(envelope) => envelope,
+                                Err(error) => {
+                                    warn!(?error, "rejected Android TUN packet before relay");
+                                    continue;
+                                }
+                            },
+                            Err(error) => {
+                                warn!(?error, "invalid Android TUN packet policy");
+                                continue;
+                            }
+                        },
+                        Err(error) => {
+                            warn!(?error, "unable to open data plane for Android TUN packet");
+                            continue;
+                        }
+                    };
+                    {
                             let envelope = DataPlaneEnvelope {
-                                kind: DATA_PLANE_KIND.to_owned(),
+                                kind: envelope.kind,
                                 session_id,
-                                frame,
+                                frame: envelope.frame,
                             };
                             let message = ForwardingMessage {
                                 kind: FORWARDING_KIND.to_owned(),
@@ -86,9 +105,9 @@ pub async fn run_client(mut tun_rx: Option<tokio::sync::mpsc::UnboundedReceiver<
                                 }),
                             };
                             if let Ok(payload) = serde_json::to_vec(&message) {
+                                println!("VPN_PACKET_TX_TO_RELAY length={}", packet_length);
                                 node.request_discovery(*exit, payload);
                             }
-                        }
                     }
                 }
             }
@@ -128,8 +147,10 @@ pub async fn run_client(mut tun_rx: Option<tokio::sync::mpsc::UnboundedReceiver<
                                     if let Some(channel) = active_channel.as_mut() {
                                         if let Ok(mut data_plane) = DataPlane::open(channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE) {
                                             if let Ok(received) = data_plane.receive(&message.data) {
+                                                    println!("VPN_PACKET_RX_FROM_RELAY length={}", received.payload.len());
                                                 if let Some(tx) = tun_tx.as_ref() {
                                                     let _ = tx.send(received.payload);
+                                                        println!("VPN_PACKET_TX_TO_TUN");
                                                 }
                                             }
                                         }

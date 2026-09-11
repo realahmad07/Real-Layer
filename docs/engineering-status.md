@@ -1,98 +1,109 @@
 # Engineering status
 
-This document captures the current phase of the project and the exact gate that must be satisfied before any VPN claim is made.
+This document captures the exact engineering state of the project and the proof gate that remains before any VPN capability claim is valid.
 
 ## Objective
 
-The active objective is to prove that real packets enter the Android TUN interface and are read by the native Rust layer, without redesigning the application or bypassing the established network architecture.
+The present objective is narrow and measurable: prove that real packets reach the Android TUN and are successfully visible to the native Rust read loop without redesigning the application or replacing the existing architecture.
+
+## Current state
+
+### Proven
+
+The project has already proven the following:
+
+- the Android app is able to reach the VPN startup flow,
+- the native library loads correctly,
+- the Android `VpnService` creates a TUN device,
+- the Java/Kotlin service calls the native Rust entry point,
+- the JNI entry reaches Rust and the startup guard is passed,
+- the fd ownership problem was fixed by duplicating the TUN descriptor before using it in Rust.
+
+Evidence captured from the emulator included the following log sequence:
+
+```text
+RealLayerVpnService: VPN_SERVICE_START
+RealLayerVpnService: VPN_TUN_ESTABLISHED fd=88
+RealLayerVpnService: VPN_RUST_START fd=88
+REAL_LAYER_JNI: JNI_STARTCORE_ENTERED fd=88 running=0
+REAL_LAYER_JNI: JNI_STARTCORE_RUNNING_SET fd=88
+```
+
+This confirms the relevant startup boundary is reached and is not blocked before the native path begins.
+
+### Not yet proven
+
+The project has not yet proven the following:
+
+- real phone or emulator traffic is entering the TUN,
+- the Rust read loop is receiving packet bytes with valid non-zero lengths,
+- the traffic reaches any subsequent packet/data-plane stage,
+- the loop remains stable across repeated connects.
+
+Because of this, the project can claim only a successful native startup proof, not a VPN functionality claim.
 
 ## Proof boundary
 
-The critical boundary is:
+The current proof boundary is:
 
 ```text
 Android VpnService
     ↓
 TUN file descriptor
     ↓
-Rust JNI bridge
+JNI bridge
     ↓
-TUN read loop
+Rust read loop
     ↓
-packet log + proof capture
+packet capture / packet log proof
 ```
 
-Only after real traffic is observed at this boundary can any claim be made about VPN behavior or packet forwarding.
+A valid functional claim requires a packet to be observed at the bottom of that pipeline.
 
-## Completed work
+## Completed work summary
 
-### 1. Native build repaired
+### 1. Toolchain and build repair
 
-The initial blocker was the Android linker path. The project was rebuilt using the target-specific linker from the Android NDK:
+The Windows Android linker issue was resolved by building with the correct target-specific linker. The native library was rebuilt and repackaged into the app for Android execution.
 
-- `aarch64-linux-android30-clang.cmd`
-- proper `CC_*` and `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` environment values
+### 2. Android app startup path
 
-This resolved the Windows-specific toolchain failure and produced a valid release build for the ARM64 target.
+The app successfully launched the VPN flow and reached the Java/Kotlin service. The tunnel was established and the service called the native Rust function that starts the client runtime.
 
-### 2. Android app rebuilt and installed
+### 3. Descriptor ownership fix
 
-The Rust native library was copied into the Android app's JNI directory and the APK was rebuilt and installed to the emulator. This included the required native library artifact for the app runtime.
+The earlier fatal issue was caused when Rust owned the same file descriptor that Android still needed to manage. The fix was to duplicate the original TUN fd and keep the duplicate as the Rust-owned descriptor, preserving the original Android-owned fd.
 
-### 3. TUN startup path verified
+### 4. Runtime instrumentation
 
-The service reached the expected Android logging path:
-
-- `VPN_SERVICE_START`
-- `VPN_TUN_ESTABLISHED fd=<n>`
-- `VPN_RUST_START fd=<n>`
-
-This confirmed the VPN permission flow and TUN creation path were working as expected.
-
-### 4. FD ownership root cause fixed
-
-The fatal issue was a descriptor ownership problem. Android owns the original `ParcelFileDescriptor` backing the TUN. Rust previously converted the raw descriptor into a Rust-owned `File` without duplication, which triggered the Android fdsan close error.
-
-The fix was to duplicate the TUN fd first using `dup()` and then convert the duplicated descriptor into Rust-owned file handles. This preserves Android's ownership of the original descriptor while allowing the TUN read loop to operate safely.
+The native bridge was instrumented to log entry and startup markers so the exact debug boundary is visible in `logcat`.
 
 ## Remaining proof work
 
-The following is still required before any software claim is accepted:
+The remaining work is intentionally small and specific:
 
-### 1. Real packet ingress proof
+1. trigger the VPN flow,
+2. generate one real network request from the emulator/device,
+3. confirm a non-zero packet length on the TUN read loop,
+4. capture the packet log line as proof,
+5. repeat for three clean cycles before any broader claim is accepted.
 
-Generate genuine traffic from the emulator or Android device while the VPN is running and confirm logs such as:
+## Guardrails
 
-```text
-VPN_TUN_PACKET_RX length=<actual number> direction=INBOUND
-TUN_PACKET INBOUND len=... protocol=... src=... dst=...
-```
-
-### 2. Three-cycle validation
-
-The proof must pass exactly three independent cycles:
-
-1. Connect
-2. Generate real traffic
-3. Observe TUN packet RX
-4. Disconnect and reconnect
-5. Repeat again
-
-The system must show stable behavior across all three cycles.
-
-### 3. Stability review
-
-The app must remain stable across reconnects without crashing, without descriptor misuse, and without losing the actual TUN read loop.
-
-## Explicit non-goals
-
-- UI redesign
-- replacement of the existing Rust networking architecture
-- relay forwarding claims before packet proof
-- claiming "VPN functionality" without verified packet ingress
+- no UI redesign,
+- no replacement of the working networking architecture,
+- no relay or forwarding claim before packet proof,
+- no claim of Internet VPN behavior before TUN ingress is proven,
+- no synthetic packet-only proof accepted as a substitute for real traffic.
 
 ## Current status summary
 
-The project has successfully passed the build and installation gate and resolved the fd ownership bug. It is now at the final proof gate: real traffic must be observed on the Android TUN before the project can legitimately claim VPN-level behavior.
+The project is in a validated startup state and a packet-proof gate.
 
-No forwarding, relay, or exit-node claim should be made until this proof is captured and repeated successfully.
+Status:
+
+- startup path: proven,
+- native TUN entry: proven,
+- descriptor ownership bug: fixed,
+- real packet ingress: pending,
+- VPN functionality claim: blocked pending proof.

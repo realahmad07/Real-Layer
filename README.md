@@ -1,4 +1,4 @@
-# Real-Layer / Ghost Layer
+﻿# Real-Layer / Ghost Layer
 
 A Rust-based relay and networking prototype focused on controlled peer discovery, authenticated session establishment, route selection, and bounded application-level forwarding.
 

@@ -5,7 +5,6 @@ use ghost_layer_network::{
 };
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::unix::io::FromRawFd;
 
 pub struct AndroidTunDevice {
     file: File,
@@ -13,9 +12,9 @@ pub struct AndroidTunDevice {
 }
 
 impl AndroidTunDevice {
-    pub fn new(fd: i32, config: TunConfig) -> Self {
+    pub fn from_file(file: File, config: TunConfig) -> Self {
         Self {
-            file: unsafe { File::from_raw_fd(fd) },
+            file,
             config,
         }
     }
