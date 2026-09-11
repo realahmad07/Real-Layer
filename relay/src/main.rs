@@ -409,6 +409,9 @@ async fn main() -> Result<()> {
                                             adapter.close().map_err(|error| anyhow::anyhow!("close exit adapter: {error}"))?;
                                             (response, destination.to_owned())
                                         }
+                                        Some(ForwardedProtocol::Ip) => {
+                                            return Err(anyhow::anyhow!("IP forwarding not yet fully implemented on this exit relay"));
+                                        }
                                         None => return Err(anyhow::anyhow!("forwarding protocol metadata is missing")),
                                     };
                                     let response_frame = {

@@ -10,6 +10,7 @@ pub enum ForwardedProtocol {
     Tcp,
     Udp,
     Dns,
+    Ip,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
