@@ -101,7 +101,7 @@ class BackendConnectionStatus {
     }
 
     trace(
-      'uiState status=$status alive=$alive ready=$ready healthy=${healthy} resolved=${resolved.name}',
+      'uiState status=$status alive=$alive ready=$ready healthy=$healthy resolved=${resolved.name}',
     );
     return resolved;
   }
@@ -217,6 +217,7 @@ class RealLayerBackendBridge {
       throw StateError('connection already in progress');
     }
 
+    trace('BACKEND_BRIDGE_CONNECT_START');
     trace('connect start');
     _connecting = true;
     try {

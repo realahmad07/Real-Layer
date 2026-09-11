@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +7,23 @@ import 'package:flutter/services.dart';
 import 'backend_bridge.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint(
+      '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} FLUTTER_ERROR ${details.exceptionAsString()}',
+    );
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint(
+      '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} FLUTTER_PLATFORM_ERROR $error',
+    );
+    return true;
+  };
+
+  debugPrint(
+    '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} FLUTTER_MAIN_ENTERED',
+  );
   runApp(const MyApp());
 }
 
@@ -14,6 +32,9 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    debugPrint(
+      '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} MYAPP_BUILD_ENTERED',
+    );
     return MaterialApp(
       title: 'RealLayer VPN',
       theme: ThemeData(
@@ -59,6 +80,9 @@ class _MagicBlockScreenState extends State<MagicBlockScreen>
   @override
   void initState() {
     super.initState();
+    debugPrint(
+      '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} APP_MAIN_SCREEN_REACHED',
+    );
 
     _connectController = AnimationController(
       vsync: this,
@@ -134,7 +158,10 @@ class _MagicBlockScreenState extends State<MagicBlockScreen>
 
   Future<void> _onConnectTap() async {
     debugPrint(
-      '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} CONNECT tap fired currentState=${_connectionState.name}',
+      '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} ON_CONNECT_TAP_ENTERED currentState=${_connectionState.name}',
+    );
+    debugPrint(
+      '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} CONNECT_BUTTON_TAPPED currentState=${_connectionState.name}',
     );
     await _connectController.forward();
     await _connectController.reverse();
@@ -163,7 +190,9 @@ class _MagicBlockScreenState extends State<MagicBlockScreen>
         try {
           await _vpnChannel.invokeMethod<void>('stopVpn');
         } catch (vpnErr) {
-          debugPrint('[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} stopVpn channel error=$vpnErr');
+          debugPrint(
+            '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} stopVpn channel error=$vpnErr',
+          );
         }
         await _bridge.disconnect();
         await _refreshBackendStatus();
@@ -194,11 +223,17 @@ class _MagicBlockScreenState extends State<MagicBlockScreen>
     try {
       // Start the Android VPN tunnel (no-op on non-Android)
       try {
-        debugPrint('[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} invoking startVpn on channel');
+        debugPrint(
+          '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} VPN_METHOD_INVOKE_START method=startVpn channel=real_layer/vpn',
+        );
         await _vpnChannel.invokeMethod<void>('startVpn');
-        debugPrint('[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} startVpn invoked successfully');
+        debugPrint(
+          '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} VPN_METHOD_INVOKE_RESULT method=startVpn success',
+        );
       } catch (vpnErr) {
-        debugPrint('[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} startVpn channel error=$vpnErr');
+        debugPrint(
+          '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} VPN_METHOD_INVOKE_RESULT method=startVpn error=$vpnErr',
+        );
       }
       final connectedStatus = await _bridge.connect();
       if (!mounted) return;
@@ -242,207 +277,191 @@ class _MagicBlockScreenState extends State<MagicBlockScreen>
 
   @override
   Widget build(BuildContext context) {
+    debugPrint(
+      '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} CONNECT_BUTTON_VISIBLE',
+    );
     final h = MediaQuery.of(context).size.height;
     final w = MediaQuery.of(context).size.width;
+    final connectRect = Rect.fromLTWH(w * 0.5 - 110, h * 0.54, 220, 80);
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Positioned(
-              top: h * 0.18,
-              left: w * 0.05,
-              right: w * 0.05,
-              child: Container(
-                height: 300,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color:
-                          (_isConnected
-                                  ? const Color(0xFF28B78D)
-                                  : const Color(0xFF8B47FF))
-                              .withOpacity(0.14),
-                      blurRadius: 180,
-                      spreadRadius: 80,
-                    ),
-                  ],
+    return Listener(
+      onPointerUp: (event) {
+        final local = event.localPosition;
+        if (connectRect.contains(local)) {
+          debugPrint(
+            '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} CONNECT_POINTER_UP',
+          );
+          _onConnectTap();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          child: Stack(
+            children: [
+              Positioned(
+                top: h * 0.18,
+                left: w * 0.05,
+                right: w * 0.05,
+                child: Container(
+                  height: 300,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color:
+                            (_isConnected
+                                    ? const Color(0xFF28B78D)
+                                    : const Color(0xFF8B47FF))
+                                .withOpacity(0.14),
+                        blurRadius: 180,
+                        spreadRadius: 80,
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                SizedBox(height: h * 0.04),
-                ShaderMask(
-                  shaderCallback: (bounds) => const LinearGradient(
-                    colors: [Color(0xFFB158FF), Color(0xFF8270FF)],
-                    begin: Alignment.centerLeft,
-                    end: Alignment.centerRight,
-                  ).createShader(bounds),
-                  child: const Text(
-                    'REALLAYER',
-                    style: TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 6,
-                      color: Colors.white,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  SizedBox(height: h * 0.04),
+                  ShaderMask(
+                    shaderCallback: (bounds) => const LinearGradient(
+                      colors: [Color(0xFFB158FF), Color(0xFF8270FF)],
+                      begin: Alignment.centerLeft,
+                      end: Alignment.centerRight,
+                    ).createShader(bounds),
+                    child: const Text(
+                      'REALLAYER',
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 6,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
-                ),
-
-                const SizedBox(height: 12),
-                const AnimatedSolanaLogo(),
-                const SizedBox(height: 20),
-
-                AnimatedBuilder(
-                  animation: _pulseAnim,
-                  builder: (context, child) {
-                    return Transform.scale(
-                      scale: _isConnecting ? _pulseAnim.value : 1.0,
-                      child: child,
-                    );
-                  },
-                  child: Image.asset(
-                    'assets/box.png',
-                    height: h * 0.22,
-                    fit: BoxFit.contain,
+                  const SizedBox(height: 12),
+                  const AnimatedSolanaLogo(),
+                  const SizedBox(height: 20),
+                  AnimatedBuilder(
+                    animation: _pulseAnim,
+                    builder: (context, child) {
+                      return Transform.scale(
+                        scale: _isConnecting ? _pulseAnim.value : 1.0,
+                        child: child,
+                      );
+                    },
+                    child: Image.asset(
+                      'assets/box.png',
+                      height: h * 0.22,
+                      fit: BoxFit.contain,
+                    ),
                   ),
-                ),
-
-                const SizedBox(height: 12),
-                Text(
-                  _status.statusLabel,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 3,
+                  const SizedBox(height: 12),
+                  Text(
+                    _status.statusLabel,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 3,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-
-                GestureDetector(
-                  onTap: _onConnectTap,
-                  child: AnimatedBuilder(
-                    animation: _scaleAnim,
-                    builder: (context, child) =>
-                        Transform.scale(scale: _scaleAnim.value, child: child),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 300),
-                      width: 180,
-                      height: 55,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(4),
-                        gradient: LinearGradient(
-                          colors: _isConnected
-                              ? [
-                                  const Color(0xFF28B78D),
-                                  const Color(0xFF1A8F6A),
-                                ]
-                              : [
-                                  const Color(0xFF8F5AFF),
-                                  const Color(0xFF28B78D),
-                                ],
-                          begin: Alignment.centerLeft,
-                          end: Alignment.centerRight,
+                  const SizedBox(height: 12),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      debugPrint(
+                        '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} CONNECT_BUTTON_TAPPED',
+                      );
+                      _onConnectTap();
+                    },
+                    child: SizedBox(
+                      width: 220,
+                      height: 80,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFD400),
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0xFFFFD400),
+                              blurRadius: 20,
+                              spreadRadius: 2,
+                              offset: Offset(0, 4),
+                            ),
+                          ],
                         ),
-                        boxShadow: [
-                          BoxShadow(
-                            color:
-                                (_isConnected
-                                        ? const Color(0xFF28B78D)
-                                        : const Color(0xFF8F5AFF))
-                                    .withOpacity(0.4),
-                            blurRadius: 15,
-                            offset: const Offset(0, 4),
+                        child: const Center(
+                          child: Text(
+                            'CONNECT',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 2,
+                              color: Colors.black,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 32),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          _buildIconRow(
+                            Icons.language,
+                            'Server ${_status.alive ? 'online' : 'offline'}',
+                          ),
+                          _buildIconRow(
+                            Icons.flash_on,
+                            _status.latencyMs > 0
+                                ? '${_status.latencyMs}ms'
+                                : 'Latency unavailable',
+                          ),
+                          _buildIconRow(Icons.trending_up, _status.health),
+                          _buildIconRow(
+                            Icons.verified_user_outlined,
+                            _status.ready ? 'Protected' : 'Unprotected',
                           ),
                         ],
                       ),
-                      child: Center(
-                        child: _isConnecting
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 2.5,
-                                ),
-                              )
-                            : Text(
-                                _isConnected ? 'DISCONNECT' : 'CONNECT',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 3,
-                                  color: Colors.white,
-                                ),
-                              ),
-                      ),
                     ),
                   ),
-                ),
-
-                const SizedBox(height: 20),
-
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 32),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        _buildIconRow(
-                          Icons.language,
-                          'Server ${_status.alive ? 'online' : 'offline'}',
-                        ),
-                        _buildIconRow(
-                          Icons.flash_on,
-                          _status.latencyMs > 0
-                              ? '${_status.latencyMs}ms'
-                              : 'Latency unavailable',
-                        ),
-                        _buildIconRow(Icons.trending_up, _status.health),
-                        _buildIconRow(
-                          Icons.verified_user_outlined,
-                          _status.ready ? 'Protected' : 'Unprotected',
-                        ),
-                      ],
+                  const Text(
+                    'POWERED  MAGICBLOCK',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 3,
+                      color: Color(0xFF666666),
                     ),
                   ),
-                ),
-
-                const Text(
-                  'POWERED  MAGICBLOCK',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: 3,
-                    color: Color(0xFF666666),
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ],
-            ),
-
-            Positioned(
-              top: 10,
-              right: 10,
-              child: IconButton(
-                icon: const Icon(Icons.logout, color: Color(0xFF666666)),
-                onPressed: () {
-                  Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(
-                      builder: (context) => const LoginScreen(),
-                    ),
-                  );
-                },
+                  const SizedBox(height: 16),
+                ],
               ),
-            ),
-          ],
+              Positioned(
+                top: 10,
+                right: 10,
+                child: IconButton(
+                  icon: const Icon(Icons.logout, color: Color(0xFF666666)),
+                  onPressed: () {
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(
+                        builder: (context) => const LoginScreen(),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -604,6 +623,15 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    debugPrint(
+      '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} LOGIN_SCREEN_BUILD_ENTERED',
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      debugPrint(
+        '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} FLUTTER_FIRST_FRAME_RENDERED',
+      );
+    });
+
     final h = MediaQuery.of(context).size.height;
     final w = MediaQuery.of(context).size.width;
 

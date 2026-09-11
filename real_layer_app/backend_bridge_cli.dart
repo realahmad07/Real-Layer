@@ -101,7 +101,7 @@ class BackendConnectionStatus {
     }
 
     trace(
-      'uiState status=$status alive=$alive ready=$ready healthy=${healthy} resolved=${resolved.name}',
+      'uiState status=$status alive=$alive ready=$ready healthy=$healthy resolved=${resolved.name}',
     );
     return resolved;
   }

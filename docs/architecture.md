@@ -1,5 +1,11 @@
 # Ghost Layer Architecture
 
+## Current execution phase
+
+The project is currently in a proof-driven Android TUN validation phase. The immediate engineering objective is not broad VPN product completion; it is to prove that real packets enter the Android TUN and are read by the native Rust loop before any claim is made about VPN behavior, forwarding, or relay operation.
+
+The repository still preserves the existing architecture and does not redesign the UI or replace the current Rust networking flow. The current focus is strictly on the TUN ownership and packet-observation boundary.
+
 Ghost Layer is currently deployed as a controlled networking system. Blockchain coordination, staking, rewards, reputation, and DePIN settlement are intentionally not part of this deployment stage.
 
 Production deployment keeps the existing libp2p + QUIC architecture: each relay is an independent process with a persistent Ed25519 identity, configurable bind and advertised multiaddrs, explicit bootstrap peers, bounded resources, exact exit policy, structured logs, and lifecycle-aware health. See [deployment.md](deployment.md) for the reproducible Docker and VPS procedures.

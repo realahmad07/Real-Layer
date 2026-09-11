@@ -51,7 +51,6 @@ class RealLayerVpnService : VpnService() {
             .addRoute("0.0.0.0", 0)
             .addDnsServer("8.8.8.8")
             .setMtu(1500)
-            .setBlocking(false)
 
         tunInterface = builder.establish()
         val pfd = tunInterface ?: run {
@@ -61,8 +60,9 @@ class RealLayerVpnService : VpnService() {
         }
 
         val fd = pfd.fd
-        Log.i(TAG, "startVpn: TUN established fd=$fd")
+        Log.i(TAG, "VPN_TUN_ESTABLISHED fd=$fd")
         Log.i(TAG, "VPN_RUST_START fd=$fd")
+        println("VPN_RUST_START fd=$fd")
         startCore(fd)
     }
 

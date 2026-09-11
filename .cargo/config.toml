@@ -1,0 +1,10 @@
+﻿[target.aarch64-linux-android]
+ar = "C:/android-ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+linker = "C:/android-ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android30-clang.exe"
+
+[env]
+ANDROID_NDK_HOME = "C:/android-ndk"
+ANDROID_HOME = "C:/Users/Ali Computers/AppData/Local/Android/Sdk"
+CC_aarch64_linux_android = "C:/android-ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android30-clang.exe"
+AR_aarch64_linux_android = "C:/android-ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = "C:/android-ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android30-clang.exe"
