@@ -45,6 +45,19 @@ pub struct NetworkNode {
     pub swarm: Swarm<Behaviour>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PingBehaviourSettings {
+    pub interval: Duration,
+    pub timeout: Duration,
+}
+
+pub(crate) fn ping_behavior_settings(connection_timeout: Duration) -> PingBehaviourSettings {
+    let interval = connection_timeout.max(Duration::from_secs(15));
+    let timeout = connection_timeout.min(Duration::from_secs(5)).max(Duration::from_millis(500));
+
+    PingBehaviourSettings { interval, timeout }
+}
+
 #[derive(Debug)]
 pub enum NetworkEvent {
     PeerConnected {
@@ -83,6 +96,7 @@ pub enum NetworkEvent {
 impl NetworkNode {
     pub fn new(identity: &NodeIdentity, connection_timeout: Duration) -> Result<Self> {
         let public_key = identity.keypair().public();
+        let ping_settings = ping_behavior_settings(connection_timeout);
         let swarm = SwarmBuilder::with_existing_identity(identity.keypair().clone())
             .with_tokio()
             .with_quic()
@@ -91,7 +105,11 @@ impl NetworkNode {
                     "/ghost-layer/identify/1.0.0".to_owned(),
                     public_key.clone(),
                 )),
-                ping: ping::Behaviour::new(ping::Config::new().with_interval(connection_timeout)),
+                ping: ping::Behaviour::new(
+                    ping::Config::new()
+                        .with_interval(ping_settings.interval)
+                        .with_timeout(ping_settings.timeout),
+                ),
                 discovery: request_response::Behaviour::with_codec(
                     RelayDiscoveryCodec,
                     std::iter::once((
@@ -200,10 +218,18 @@ impl NetworkNode {
 
 #[cfg(test)]
 mod tests {
-    use super::{NetworkEvent, NetworkNode};
+    use super::{ping_behavior_settings, NetworkEvent, NetworkNode};
     use crate::peer::NodeIdentity;
     use futures::StreamExt;
     use std::time::Duration;
+
+    #[test]
+    fn ping_interval_is_not_reused_as_connection_timeout() {
+        let settings = ping_behavior_settings(Duration::from_secs(10));
+
+        assert_eq!(settings.interval, Duration::from_secs(15));
+        assert_eq!(settings.timeout, Duration::from_secs(5));
+    }
 
     #[tokio::test]
     async fn two_local_quic_peers_connect_and_ping() {

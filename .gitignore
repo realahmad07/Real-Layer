@@ -1,5 +1,35 @@
 # Rust build output
 /target/
+**/target/
+
+# Flutter / Dart build and generated outputs
+**/build/
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+**/*.g.dart
+**/*.freezed.dart
+**/generated/
+**/Generated.xcconfig
+**/Pods/
+**/.symlinks/
+**/android/.gradle/
+**/.gradle/
+**/android/**/build/
+**/ios/**/build/
+**/linux/**/build/
+**/web/**/build/
+**/windows/**/build/
+**/macos/**/build/
+
+# Android / mobile package artifacts
+**/*.apk
+**/*.aab
+**/*.aar
+**/*.jks
+**/*.keystore
+**/local.properties
 
 # Local environment files
 .env
@@ -17,5 +47,15 @@ identity/
 # Editor and OS files
 .vscode/
 .idea/
+*.iml
 .DS_Store
 Thumbs.db
+
+# Logs and caches
+*.log
+**/coverage/
+**/.cache/
+**/tmp/
+
+# Flutter ephemeral files
+**/ios/Flutter/ephemeral/

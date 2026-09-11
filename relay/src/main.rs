@@ -632,6 +632,24 @@ impl HealthSignals {
     }
 }
 
+fn http_response(status_code: u16, body: &str) -> Vec<u8> {
+    let body_bytes = body.as_bytes();
+    let status_text = match status_code {
+        200 => "OK",
+        404 => "Not Found",
+        503 => "Service Unavailable",
+        _ => "OK",
+    };
+
+    let mut response = Vec::new();
+    response.extend_from_slice(format!("HTTP/1.1 {status_code} {status_text}\r\n").as_bytes());
+    response.extend_from_slice(b"Content-Type: application/json\r\n");
+    response.extend_from_slice(format!("Content-Length: {}\r\n", body_bytes.len()).as_bytes());
+    response.extend_from_slice(b"Connection: close\r\n\r\n");
+    response.extend_from_slice(body_bytes);
+    response
+}
+
 fn spawn_health_server(address: &str, signals: HealthSignals) -> Result<thread::JoinHandle<()>> {
     let address = address.to_owned();
     let listener = std::net::TcpListener::bind(&address)
@@ -660,11 +678,9 @@ fn spawn_health_server(address: &str, signals: HealthSignals) -> Result<thread::
                         "/health" => (503, r#"{"health":"unhealthy"}"#),
                         _ => (404, r#"{"error":"not_found"}"#),
                     };
-                    let response = format!(
-                        "HTTP/1.1 {status} OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                        body.len()
-                    );
-                    let _ = stream.write_all(response.as_bytes());
+                    let response = http_response(status, body);
+                    let _ = stream.write_all(&response);
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(100));
@@ -691,6 +707,22 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     {
         let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_health_response_is_valid_http() {
+        let response = http_response(200, "{\"alive\":true}");
+        let text = String::from_utf8(response).expect("http response should be utf-8");
+
+        assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(text.contains("Content-Type: application/json"));
+        assert!(text.contains("Content-Length: 16"));
+        assert!(text.contains("{\"alive\":true}"));
     }
 }
 
