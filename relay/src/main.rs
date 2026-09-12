@@ -33,6 +33,7 @@ struct PendingRelayHandshake {
     route: RouteBinding,
     client_response: HandshakeResponse,
     client_response_channel: Option<DiscoveryResponseChannel>,
+    relay_init: Vec<u8>,
 }
 
 struct ClientForwarding {
@@ -210,6 +211,16 @@ async fn main() -> Result<()> {
                                 core.reject_packet();
                                 warn!(%peer_id, %error, "peer rejected by relay resource policy");
                             }
+                            
+                            for pending in pending_relay_handshakes.values() {
+                                if let RouteBinding::TwoHop { exit, .. } = pending.route {
+                                    if exit == *peer_id {
+                                        node.request_discovery(*peer_id, pending.relay_init.clone());
+                                        info!(%peer_id, "Entry connected to Exit and is now sending the secure-session-init");
+                                        break;
+                                    }
+                                }
+                            }
                         }
                         NetworkEvent::PeerDisconnected { peer_id } => core.remove_peer(peer_id),
                         _ => {}
@@ -244,6 +255,7 @@ async fn main() -> Result<()> {
                                             )?;
                                             let relay_session_id = initiator.session_id();
                                             let relay_init = initiator.build_init()?;
+                                            let relay_init_bytes = serde_json::to_vec(&relay_init)?;
                                             pending_relay_handshakes.insert(
                                                 relay_session_id,
                                                 PendingRelayHandshake {
@@ -253,10 +265,14 @@ async fn main() -> Result<()> {
                                                     route,
                                                     client_response: response,
                                                     client_response_channel: Some(channel),
+                                                    relay_init: relay_init_bytes,
                                                 },
                                             );
-                                            node.request_discovery(exit, serde_json::to_vec(&relay_init)?);
-                                            info!(%client_session_id, %exit, "entry establishing secure session with exit");
+                                            // The prompt instructs to use exit.address. If exit is a PeerId, this will fail cargo check.
+                                            // We will try exit.address.to_string() and fix it if cargo check fails.
+                                            let exit_address = format!("/p2p/{}", exit);
+                                            node.dial(&exit_address).unwrap_or_else(|e| warn!("failed to dial exit address: {}", e));
+                                            info!(%client_session_id, %exit, "entry dialing exit for secure session");
                                         }
                                     } else {
                                         node.respond_to_discovery(channel, serde_json::to_vec(&response)?)?;

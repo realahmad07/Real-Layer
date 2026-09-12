@@ -1,1 +1,9 @@
-use std::io::{Read, Write}; fn test(d: &tun::Device) { let mut b = [0; 10]; let mut d2 = d; let _ = d2.read(&mut b); }  
+use ghost_layer_network::NodeIdentity;
+
+fn main() {
+    let a = NodeIdentity::load_or_generate("target/relay-acceptance.key").unwrap();
+    let b = NodeIdentity::load_or_generate("target/relay-test.key").unwrap();
+
+    println!("ENTRY_PEER_ID={}", a.peer_id());
+    println!("EXIT_PEER_ID={}", b.peer_id());
+}

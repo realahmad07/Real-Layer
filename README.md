@@ -238,3 +238,8 @@ graph TD
   C -->|PacketPipeline| B
   B -->|VpnService| A
 `
+
+
+## Routing Enhancements
+
+- **Two-Hop Exit Dialing**: The Entry relay now intelligently defers sending secure session initializations until it establishes a confirmed libp2p connection with the downstream Exit relay. Handshakes are actively queued via PendingRelayHandshake and safely dispatched upon receiving NetworkEvent::PeerConnected.
