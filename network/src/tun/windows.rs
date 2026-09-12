@@ -69,6 +69,9 @@ impl WindowsTunDevice {
         device_config
             .tun_name(&config.interface_name)
             .mtu(config.mtu as u16)
+            .address((10, 8, 0, 2))
+            .destination((10, 8, 0, 0))
+            .netmask((255, 255, 255, 0))
             .layer(tun::Layer::L3)
             .up();
         let device = tun::create(&device_config).map_err(|error| {

@@ -221,3 +221,20 @@ Screenshots will be added after the next successful runtime validation cycle on 
 ## Development notes
 
 This repository is intentionally operating in a proof-first workflow. The engineering goal is to validate a narrow boundary and only then broaden the claims about network function. This approach is designed to prevent unsupported VPN, routing, and anonymity claims while preserving the underlying technical work on the path to real runtime validation.
+
+
+## Architecture Flow
+
+`mermaid
+graph TD
+  A[Android App / VpnService] -->|TUN 10.8.0.1/24| B[Rust JNI]
+  B -->|PacketPipeline| C[DataPlane]
+  C -->|QUIC / libp2p| D[Host Relay Node]
+  D -->|OneHop Routing| E[Windows TUN Interface]
+  E -->|Windows NAT / Routing| F[Real Internet]
+  F -->|Return Traffic| E
+  E -->|Relay DataPlane| D
+  D -->|QUIC| C
+  C -->|PacketPipeline| B
+  B -->|VpnService| A
+`
