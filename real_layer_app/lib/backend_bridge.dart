@@ -221,6 +221,17 @@ class RealLayerBackendBridge {
     trace('connect start');
     _connecting = true;
     try {
+      if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) {
+        trace('connect bypass fetchStatus on mobile');
+        return BackendConnectionStatus(
+          alive: true,
+          ready: true,
+          health: 'healthy',
+          status: 'online',
+          latencyMs: 0,
+        );
+      }
+
       final current = await fetchStatus();
       trace(
         'connect initial current alive=${current.alive} ready=${current.ready} healthy=${current.healthy} uiState=${current.uiState.name}',

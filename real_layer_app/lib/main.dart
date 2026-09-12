@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -117,6 +118,12 @@ class _MagicBlockScreenState extends State<MagicBlockScreen>
   }
 
   Future<void> _refreshBackendStatus() async {
+    if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) {
+      if (_connectionState == BackendRuntimeConnectionState.connected ||
+          _connectionState == BackendRuntimeConnectionState.connecting) {
+        return;
+      }
+    }
     debugPrint(
       '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} _refreshBackendStatus start',
     );
@@ -145,6 +152,16 @@ class _MagicBlockScreenState extends State<MagicBlockScreen>
         '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} _connectionState set to disconnected (user guard)',
       );
       return;
+    }
+
+    if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) {
+      if (_connectionState == BackendRuntimeConnectionState.connected ||
+          _connectionState == BackendRuntimeConnectionState.connecting) {
+        debugPrint(
+          '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} _refreshBackendStatus suppressed: mobile state is already ${_connectionState.name}',
+        );
+        return;
+      }
     }
 
     setState(() {
