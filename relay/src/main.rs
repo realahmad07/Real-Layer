@@ -673,14 +673,17 @@ fn spawn_health_server(address: &str, signals: HealthSignals) -> Result<thread::
         info!(%address, "health endpoint listening");
         while signals.alive.load(Ordering::Acquire) {
             match listener.accept() {
-                Ok((mut stream, _)) => {
+                Ok((mut stream, addr)) => {
+                    tracing::info!("Health check accepted connection from {}", addr);
                     let signals = signals.clone();
                     std::thread::spawn(move || {
                         let _ = stream.set_nonblocking(false);
                         let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(5000)));
                         let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(5000)));
                         let mut request = [0u8; 512];
-                        let bytes_read = stream.read(&mut request).unwrap_or(0);
+                        let read_res = stream.read(&mut request);
+                        tracing::info!("Health check read result from {}: {:?}", addr, read_res);
+                        let bytes_read = read_res.unwrap_or(0);
                         if bytes_read == 0 {
                             return;
                         }
