@@ -674,32 +674,34 @@ fn spawn_health_server(address: &str, signals: HealthSignals) -> Result<thread::
         while signals.alive.load(Ordering::Acquire) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    let _ = stream.set_nonblocking(false);
-                    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(5000)));
-                    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(5000)));
-                    let mut request = [0u8; 512];
-                    let bytes_read = stream.read(&mut request).unwrap_or(0);
-                    if bytes_read == 0 {
-                        continue;
-                    }
-                    let request_str = String::from_utf8_lossy(&request[..bytes_read]);
-                    tracing::info!("Health check connection accepted. Read {} bytes", bytes_read);
-                    let path = request_str.split_whitespace().nth(1).unwrap_or("/");
-                    let (status, body) = match path {
-                        "/live" => (200, r#"{"alive":true}"#),
-                        "/ready" if signals.ready.load(Ordering::Acquire) => {
-                            (200, r#"{"ready":true}"#)
+                    let signals = signals.clone();
+                    std::thread::spawn(move || {
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(5000)));
+                        let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(5000)));
+                        let mut request = [0u8; 512];
+                        let bytes_read = stream.read(&mut request).unwrap_or(0);
+                        if bytes_read == 0 {
+                            return;
                         }
-                        "/ready" => (503, r#"{"ready":false}"#),
-                        "/health" if signals.healthy.load(Ordering::Acquire) => {
-                            (200, r#"{"health":"healthy"}"#)
-                        }
-                        "/health" => (503, r#"{"health":"unhealthy"}"#),
-                        _ => (404, r#"{"error":"not_found"}"#),
-                    };
-                    let response = http_response(status, body);
-                    let _ = stream.write_all(&response);
-                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                        let request_str = String::from_utf8_lossy(&request[..bytes_read]);
+                        let path = request_str.split_whitespace().nth(1).unwrap_or("/");
+                        let (status, body) = match path {
+                            "/live" => (200, r#"{"alive":true}"#),
+                            "/ready" if signals.ready.load(Ordering::Acquire) => {
+                                (200, r#"{"ready":true}"#)
+                            }
+                            "/ready" => (503, r#"{"ready":false}"#),
+                            "/health" if signals.healthy.load(Ordering::Acquire) => {
+                                (200, r#"{"health":"healthy"}"#)
+                            }
+                            "/health" => (503, r#"{"health":"unhealthy"}"#),
+                            _ => (404, r#"{"error":"not_found"}"#),
+                        };
+                        let response = http_response(status, body);
+                        let _ = stream.write_all(&response);
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                    });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(100));
