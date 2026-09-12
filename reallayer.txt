@@ -1,0 +1,44 @@
+REAL LAYER
+Former name: Ghost Layer
+
+Repository:
+https://github.com/realahmad07/Real-Layer.git
+
+Correct Antigravity working project:
+
+Flutter application:
+C:\Users\Ali Computers\Real - Layer\Real-Layer-Antigravity\real_layer_app
+
+Flutter project pubspec:
+C:\Users\Ali Computers\Real - Layer\Real-Layer-Antigravity\real_layer_app\pubspec.yaml
+
+Git repository root:
+C:\Users\Ali Computers\Real - Layer\Real-Layer-Antigravity
+
+Android package:
+com.example.magicblock_app
+
+Primary emulator:
+emulator-5554
+
+Architecture:
+Flutter UI
+→ Android MethodChannel
+→ Android VpnService
+→ Android TUN
+→ JNI
+→ Rust client
+→ PacketPipeline
+→ encrypted DataPlane
+→ Entry Relay
+→ Exit Relay
+→ controlled destination
+
+Current project state:
+Flutter callback boundary has been fixed in source but fresh runtime proof is still pending.
+
+Current temporary debugging state:
+Login bypass may still be enabled.
+
+Important:
+This file is a project reference and identification document only. It does not contain credentials, secrets, or private keys.

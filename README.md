@@ -1,178 +1,223 @@
-﻿# Real-Layer / Ghost Layer
+﻿# Real Layer
 
-A Rust-based relay and networking prototype focused on controlled peer discovery, authenticated session establishment, route selection, and bounded application-level forwarding.
+Formerly Ghost Layer.
 
-This project is intentionally not a public VPN, not an anonymity system, and not an unrestricted Internet access layer. It is a controlled, policy-first network prototype that validates transport behavior, secure routing state, and allowlisted exit handling in a bounded test environment.
+Real Layer is a proof-driven networking and relay prototype focused on secure routing, bounded forwarding, Android TUN integration, and controlled client-to-relay communication. The repository currently represents a technical foundation for private routing experiments rather than a public VPN or unrestricted Internet access layer.
 
-## Executive summary
+## Vision
 
-The repository is currently in a strict proof-driven integration phase focused on the Android TUN boundary. The priority is to verify the exact boundary where the VPN tunnel connects to native code before claiming any broader VPN functionality.
+Real Layer is designed around the following engineering principles:
 
-### Completed
+- authenticated peer and relay communication
+- explicit route and exit policy enforcement
+- encrypted session establishment and bounded forwarding
+- Android VPN integration through a controlled TUN boundary
+- future coordination and relay-topology expansion without claiming production anonymity guarantees
 
-- Android ARM64 native build was repaired and verified using the correct target-specific linker.
-- The app was rebuilt and installed to the connected emulator.
-- The Java/Kotlin VPN service successfully created the Android TUN interface and reached the native start boundary.
-- The fd ownership bug was resolved by duplicating the TUN descriptor before Rust converted it into a file handle.
-- The TUN read loop remains instrumented to log packet ingress at the proof boundary.
+## Current honesty boundary
 
-### Current proof gate
+This repository does not claim:
 
-The project is not allowed to claim VPN behavior until real device traffic is observed traversing the Android TUN interface.
+- unrestricted VPN access
+- guaranteed anonymous browsing
+- public Internet proxy functionality
+- production-grade anonymity network operation
+- live DePIN or Solana routing behavior without runtime proof
 
-The active requirement is:
+Only features that are implemented and verified in source or runtime are described as active.
 
-1. start the app and grant VPN permission,
-2. trigger the CONNECT flow,
-3. generate real device traffic,
-4. verify actual `VPN_TUN_PACKET_RX` logs with valid packet length and metadata,
-5. repeat the flow for three clean cycles before making a functional claim.
+## Project status at a glance
 
-### Explicit guardrails
+| Component | Status |
+| --- | --- |
+| Flutter UI | Implemented |
+| Android VpnService foundation | Implemented |
+| MethodChannel bridge | Implemented |
+| JNI bridge | Implemented |
+| Android TUN foundation | Implemented |
+| Rust client | Implemented |
+| libp2p / QUIC | Implemented |
+| Secure data plane | Implemented |
+| Entry / exit relay | Implemented |
+| Real packet forwarding | Verification pending |
+| Real public IP change | Verification pending |
+| Production VPN | Not claimed |
+| Solana coordination | Planned / partial |
+| MagicBlock integration | Planned / partial |
+| DePIN incentives | Planned |
 
-- no UI redesign is in scope,
-- no replacement of the existing Rust networking architecture is permitted,
-- no claim of relay forwarding or Internet VPN functionality is allowed without real TUN packet proof,
-- no synthetic packet injection is allowed for the proof gate,
-- the current work remains limited to proving the Android TUN ingress path.
+## Architecture overview
 
-## Workspace
+```mermaid
+flowchart TD
+    A[Flutter UI] --> B[MethodChannel]
+    B --> C[Android VpnService]
+    C --> D[Android TUN]
+    D --> E[JNI]
+    E --> F[Rust Client]
+    F --> G[PacketPipeline]
+    G --> H[Encrypted DataPlane]
+    H --> I[Entry Relay]
+    I --> J[Exit Relay]
+    J --> K[Controlled Destination]
 
-- `client/`: user-side Rust client and native Android bridge
-- `relay/`: decentralized Rust relay node
-- `network/`: shared peer, configuration, health, and transport abstractions
-- `programs/`: future Solana/Anchor coordination modules
-- `coordination/`: future MagicBlock coordination components
-- `dashboard/`: future UI and operational tooling
-- `tests/`: integration and end-to-end test space
-- `docs/`: architecture and design documentation
-- `docker/`: multi-stage relay image, Compose topology, and systemd example
+    K --> J
+    J --> I
+    I --> H
+    H --> G
+    G --> F
+    F --> E
+    E --> D
+    D --> C
+    C --> B
+    B --> A
+```
 
-## Current state
-
-### Done
-
-- libp2p + QUIC transport layer with persistent Ed25519 identities
-- peer discovery over request/response protocol and metadata exchange
-- relay health, heartbeat, and in-memory registry flow
-- secure session establishment using X25519 + HKDF + ChaCha20-Poly1305
-- encrypted channel abstraction with sequence validation and replay protection
-- one-hop and two-hop route selection logic
-- controlled multi-hop forwarding between client, entry relay, and exit relay
-- exit packet handling with explicit destination policy and allowlisted TCP exits
-- local runtime tests and Docker-based relay examples
-- Android TUN startup boundary and fd-ownership fix
-
-### Still left / intentionally deferred
-
-- unrestricted Internet forwarding
-- TUN/TAP or OS-level packet routing integration
-- public decentralized registry or Solana/MagicBlock coordination as a live network layer
-- production reputation, staking, rewards, and DePIN settlement logic
-- anonymous traffic obfuscation or privacy guarantees beyond controlled protocol boundaries
-- any claim of real-world public deployment without explicit operator-controlled validation
-- the required packet proof at the Android TUN ingress boundary
-
-> This is a prototype and a technical control-plane foundation, not a production VPN service.
-
-## System architecture
+## Future decentralized architecture
 
 ```mermaid
 flowchart LR
-    Client --> Discovery
-    Discovery --> RelayA[Entry Relay]
-    RelayA --> RelayB[Exit Relay]
-    RelayA -->|secure session| Client
-    RelayB -->|allowlisted exit| TestServer[Test Destination]
+    A[Real Layer Client] --> B[Relay Network]
+    B --> C[Solana Coordination]
+    C --> D[MagicBlock / high-frequency state]
+    D --> E[FUTURE: incentives / registry / reputation]
 ```
 
-### Components
-
-- `client/` – client bootstrap, discovery, route selection, and session initiation
-- `network/` – shared networking primitives: config, identities, session crypto, discovery, channels, packet handling
-- `relay/` – relay runtime, metadata, health, routing, forwarding manager, exit policy enforcement
-- `docker/` – containerized relay deployment examples
-- `docs/` – architecture and deployment notes
-- `tests/` – integration tests simulating controlled relay behaviors
+> Future coordination components are shown as planned work only and are not presented as active production features.
 
 ## Repository layout
 
-- `client/` – user-side Rust client prototype
-- `network/` – shared protocol, identity, session, and transport code
-- `relay/` – relay node implementation with health, registry, and forwarding logic
-- `docker/` – relay container and Compose examples
-- `docs/` – architecture and deployment documentation
-- `scripts/` – operational utilities
-- `tests/` – integration and multi-hop runtime tests
+- `client/` – client-side Rust runtime and bridge integration
+- `network/` – shared networking, config, health, packet, session, and transport layers
+- `relay/` – relay runtime and forwarding logic
+- `real_layer_app/` – Flutter Android app and native bridge layer
+- `docs/` – architecture, deployment, and status notes
+- `docker/` – deployment and local relay examples
+- `scripts/` – utility scripts and operational helpers
+- `tests/` – integration and validation paths
+- `README.md` – project summary and current engineering posture
+- `reallayer.txt` – project identity and repository reference for handoff tracking
 
-## Installation and development
+## Technologies in active use
 
-### Prerequisites
+The following technologies are present or currently relevant in the codebase and documentation:
 
-- Rust stable (current workspace targets Rust 1.80+)
-- a working Cargo toolchain
-- optionally Docker for Compose-based local validation
+- Flutter
+- Dart
+- Android VpnService
+- MethodChannel
+- JNI
+- Rust
+- libp2p
+- QUIC
+- Ed25519 identities
+- secure session establishment
+- encrypted data plane
+- sequence and replay protection
+- route binding
+- destination allowlisting
+- bounded forwarding
+- TCP / UDP forwarding components where they are actually implemented
 
-### Build and test
+The following are explicitly treated as future or planned work when they are not yet proven live:
 
-```bash
-cargo check
-cargo test
-```
+- Solana coordination
+- MagicBlock integration
+- DePIN or incentive infrastructure
+- public relay marketplace or registry behavior
 
-For a workspace build from the repository root:
+## Security architecture
 
-```bash
-cargo build --workspace
-```
+The project currently emphasizes the following technical controls:
 
-## Quick start
+- persistent Ed25519 node identity
+- authenticated secure sessions
+- key exchange and authenticated encryption
+- sequence validation and replay protection
+- route/session binding
+- deny-by-default exit policy
+- explicit destination allowlists
+- bounded forwarding and policy-aware exits
+- controlled external destination scope
 
-1. Review the configuration environment variables defined in the network config types.
-2. Start a relay with a persistent identity file.
-3. Set `GHOST_BOOTSTRAP_PEERS` to explicit peer multiaddrs.
-4. Run the client with a valid route mode (`one-hop` or `two-hop`).
-5. Validate using the controlled test paths described in the relay tests.
+### Current limitations
 
-## Security and operational boundaries
+The repository does not currently claim a production VPN, unrestricted transit layer, or privacy guarantee beyond the controlled protocol and environment boundaries. Any public-facing claim must be backed by fresh runtime verification and real packet proof.
 
-This project intentionally enforces strict boundaries:
+## Implementation status
 
-- no unfiltered public destination handling
-- no default TUN route installation
-- no wildcard DNS resolution or implicit fallback
-- no anonymous client IP protection claims
-- no production on-chain traffic path for user payloads
+| Area | Status | Notes |
+| --- | --- | --- |
+| Flutter UI | Implemented | App shell and debug path are present |
+| Android VpnService foundation | Implemented | Service path and permission flow exist |
+| MethodChannel integration | Implemented | Mechanism exists for start/stop VpnService calls |
+| JNI bridge | Implemented | Native bridge layer is present |
+| TUN boundary | Implemented foundation | Ownership and setup work has been addressed |
+| Rust relay / client | Implemented | Core network and session logic exist |
+| Secure transport | Implemented | Authenticated and encrypted session components are present |
+| Real packet forwarding | Verification pending | Requires runtime proof at the Android TUN boundary |
+| Public IP change | Verification pending | Not yet proven with a fresh APK run |
+| Production VPN claim | Not claimed | Guarded by proof gate |
 
-Any deployment should be treated as a private, operator-controlled network simulation until explicit external validation is completed.
+## Development status
 
-## Documentation map
+### Completed
 
-- [docs/architecture.md](docs/architecture.md) – design intent and architecture overview
-- [docs/deployment.md](docs/deployment.md) – runtime, Docker, identity, and VPS guidance
-- [docs/engineering-status.md](docs/engineering-status.md) – proof gate and active engineering status
+- Rust networking foundation
+- relay architecture
+- Android VPN foundation
+- TUN ownership safety work
+- JNI bridge
+- Flutter UI
+- Flutter backend bridge
+- Flutter CONNECT callback source fix
+
+### Current blocker
+
+Fresh APK runtime verification has not yet been completed.
+
+The active proof sequence is:
+
+1. Flutter main entry reached
+2. CONNECT tap reached
+3. backend bridge invoked
+4. VPN method begin invoked
+5. Android VPN start confirmation received
+
+This proof gate must be established on a fresh build before higher-level VPN or IP-change claims are made.
+
+## Screenshots
+
+Screenshots will be added after the next successful runtime validation cycle on the Android emulator.
 
 ## Roadmap
 
 ### Near term
 
-- stabilize runtime tests and edge conditions
-- improve operational observability and config validation
-- document production hardening recommendations
-- complete Android TUN packet proof
+- verify the Flutter to Android VPN callback chain on emulator hardware
+- confirm the actual VPN method start sequence end-to-end
+- validate the Android TUN ingress path with real traffic
+- preserve the current debug flow until the proof gate is complete
 
 ### Medium term
 
-- formalize route policy and health scoring extensions
-- add stronger integration tests for multi-hop failure and rejection paths
-- further separate operational state from future on-chain coordination layers
+- stabilize relay and forwarding validation
+- improve configuration hardening and operator visibility
+- tighten route policy and exit enforcement
 
 ### Long term
 
-- controlled on-chain coordination only for metadata and signaling
-- optional gateway adapters for specific use-cases under strict policy enforcement
-- production-grade deployment tooling when real-world operator requirements are defined
+- expand relay coordination in a controlled, policy-bound manner
+- integrate future coordination systems only when they are explicitly validated
+- maintain a strict distinction between implemented features and planned capabilities
 
-## Important note
+## Documentation
 
-The repository currently demonstrates a real technical foundation for secure relay interaction, not a production-grade privacy network or public Internet gateway. The code and docs are aligned around that boundary, and the Android TUN packet proof remains the next required milestone before any VPN claim is valid.
+- [docs/architecture.md](docs/architecture.md)
+- [docs/deployment.md](docs/deployment.md)
+- [docs/engineering-status.md](docs/engineering-status.md)
+- [docs/REAL_LAYER_STATUS.md](docs/REAL_LAYER_STATUS.md)
+
+## Development notes
+
+This repository is intentionally operating in a proof-first workflow. The engineering goal is to validate a narrow boundary and only then broaden the claims about network function. This approach is designed to prevent unsupported VPN, routing, and anonymity claims while preserving the underlying technical work on the path to real runtime validation.
