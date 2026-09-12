@@ -53,13 +53,13 @@ pub enum SessionState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteBinding {
     OneHop { relay: PeerId },
-    TwoHop { entry: PeerId, exit: PeerId },
+    TwoHop { entry: PeerId, exit: PeerId, exit_address: String },
 }
 
 #[derive(Serialize, Deserialize)]
 enum WireRouteBinding {
     OneHop { relay: String },
-    TwoHop { entry: String, exit: String },
+    TwoHop { entry: String, exit: String, exit_address: String },
 }
 
 impl Serialize for RouteBinding {
@@ -71,9 +71,10 @@ impl Serialize for RouteBinding {
             Self::OneHop { relay } => WireRouteBinding::OneHop {
                 relay: relay.to_string(),
             },
-            Self::TwoHop { entry, exit } => WireRouteBinding::TwoHop {
+            Self::TwoHop { entry, exit, exit_address } => WireRouteBinding::TwoHop {
                 entry: entry.to_string(),
                 exit: exit.to_string(),
+                exit_address: exit_address.clone(),
             },
         };
         wire.serialize(serializer)
@@ -89,9 +90,10 @@ impl<'de> Deserialize<'de> for RouteBinding {
             WireRouteBinding::OneHop { relay } => Ok(Self::OneHop {
                 relay: relay.parse().map_err(serde::de::Error::custom)?,
             }),
-            WireRouteBinding::TwoHop { entry, exit } => Ok(Self::TwoHop {
+            WireRouteBinding::TwoHop { entry, exit, exit_address } => Ok(Self::TwoHop {
                 entry: entry.parse().map_err(serde::de::Error::custom)?,
                 exit: exit.parse().map_err(serde::de::Error::custom)?,
+                exit_address,
             }),
         }
     }
