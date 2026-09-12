@@ -674,10 +674,17 @@ fn spawn_health_server(address: &str, signals: HealthSignals) -> Result<thread::
         while signals.alive.load(Ordering::Acquire) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(5000)));
+                    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(5000)));
                     let mut request = [0u8; 512];
-                    let _ = stream.read(&mut request);
-                    let request = String::from_utf8_lossy(&request);
-                    let path = request.split_whitespace().nth(1).unwrap_or("/");
+                    let bytes_read = stream.read(&mut request).unwrap_or(0);
+                    if bytes_read == 0 {
+                        continue;
+                    }
+                    let request_str = String::from_utf8_lossy(&request[..bytes_read]);
+                    tracing::info!("Health check connection accepted. Read {} bytes", bytes_read);
+                    let path = request_str.split_whitespace().nth(1).unwrap_or("/");
                     let (status, body) = match path {
                         "/live" => (200, r#"{"alive":true}"#),
                         "/ready" if signals.ready.load(Ordering::Acquire) => {

@@ -597,10 +597,10 @@ fn parse_health_listen_address(
             key: HEALTH_LISTEN_ADDRESS,
             value: address.clone(),
         })?;
-    if parsed.port() == 0 || !parsed.ip().is_loopback() {
+    if parsed.port() == 0 {
         return Err(ConfigError::Invalid {
             key: HEALTH_LISTEN_ADDRESS,
-            value: "health endpoint must use a loopback address and non-zero port".to_owned(),
+            value: "health endpoint must use a non-zero port".to_owned(),
         });
     }
     Ok(Some(parsed.to_string()))
