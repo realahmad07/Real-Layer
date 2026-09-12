@@ -145,6 +145,7 @@ async fn client_entry_exit_forwards_controlled_data_plane_message() {
     let route_binding = RouteBinding::TwoHop {
         entry: entry_hop.peer_id,
         exit: exit_hop.peer_id,
+        exit_address: exit_hop.address.to_string(),
     };
     let (client_session, entry_client_session) = establish_session(
         &mut client,

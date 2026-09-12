@@ -68,7 +68,7 @@ mod tests {
             client,
             entry,
             exit,
-            RouteBinding::TwoHop { entry, exit },
+            RouteBinding::TwoHop { entry, exit, exit_address: "".to_owned() },
         )
         .unwrap();
         let id = context.forwarding_id();
@@ -79,3 +79,4 @@ mod tests {
         assert_eq!(manager.len(), 0);
     }
 }
+

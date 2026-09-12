@@ -118,12 +118,6 @@ class _MagicBlockScreenState extends State<MagicBlockScreen>
   }
 
   Future<void> _refreshBackendStatus() async {
-    if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) {
-      if (_connectionState == BackendRuntimeConnectionState.connected ||
-          _connectionState == BackendRuntimeConnectionState.connecting) {
-        return;
-      }
-    }
     debugPrint(
       '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} _refreshBackendStatus start',
     );
@@ -154,15 +148,7 @@ class _MagicBlockScreenState extends State<MagicBlockScreen>
       return;
     }
 
-    if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) {
-      if (_connectionState == BackendRuntimeConnectionState.connected ||
-          _connectionState == BackendRuntimeConnectionState.connecting) {
-        debugPrint(
-          '[REAL_LAYER_TRACE] ${DateTime.now().toIso8601String()} _refreshBackendStatus suppressed: mobile state is already ${_connectionState.name}',
-        );
-        return;
-      }
-    }
+
 
     setState(() {
       _status = updated;

@@ -82,7 +82,7 @@ mod tests {
         let binding = SessionBinding {
             session_id: SessionId::generate(),
             authenticated_peer: PeerId::random(),
-            route: RouteBinding::TwoHop { entry, exit },
+            route: RouteBinding::TwoHop { entry, exit, exit_address: "".to_owned() },
             entry_peer: entry,
             exit_peer: exit,
             created_at: Instant::now(),
@@ -104,3 +104,4 @@ mod tests {
         );
     }
 }
+

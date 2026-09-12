@@ -103,7 +103,7 @@ impl RouteBinding {
     pub fn peers(&self) -> Vec<PeerId> {
         match self {
             Self::OneHop { relay } => vec![*relay],
-            Self::TwoHop { entry, exit } => vec![*entry, *exit],
+            Self::TwoHop { entry, exit, .. } => vec![*entry, *exit],
         }
     }
 
@@ -112,7 +112,7 @@ impl RouteBinding {
     }
 
     fn validate(&self) -> Result<(), SessionError> {
-        if let Self::TwoHop { entry, exit } = self {
+        if let Self::TwoHop { entry, exit, .. } = self {
             if entry == exit {
                 return Err(SessionError::InvalidRoute(
                     "entry and exit must differ".to_owned(),
@@ -777,6 +777,7 @@ mod tests {
         let route_two = RouteBinding::TwoHop {
             entry: responder_peer,
             exit: identity::Keypair::generate_ed25519().public().to_peer_id(),
+            exit_address: "".to_owned(),
         };
         let first = SessionInitiator::new(&initiator_identity, responder_peer, route_one, "1.0")
             .unwrap()
@@ -828,3 +829,5 @@ mod tests {
         ));
     }
 }
+
+

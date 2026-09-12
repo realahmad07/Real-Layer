@@ -206,9 +206,9 @@ fn client_entry_exit_dns_runtime_round_trip() {
 
 #[test]
 fn client_entry_exit_tcp_runtime_round_trip() {
-    let destination: SocketAddr = "192.168.1.3:9005".parse().unwrap();
+    let destination: SocketAddr = "8.8.8.8:53".parse().unwrap();
     if std::net::TcpStream::connect_timeout(&destination, Duration::from_millis(500)).is_err() {
-        println!("IPHONE TCP RUNTIME SKIPPED — 192.168.1.3:9005 UNAVAILABLE");
+        println!("IPHONE TCP RUNTIME SKIPPED — 8.8.8.8:53 UNAVAILABLE");
         return;
     }
     let run_id = SystemTime::now()
@@ -272,3 +272,4 @@ fn client_entry_exit_tcp_runtime_round_trip() {
     wait_for_client(client, &mut [entry, exit]);
     let _ = std::fs::remove_dir_all(directory);
 }
+

@@ -282,7 +282,7 @@ mod tests {
             client,
             entry,
             exit,
-            RouteBinding::TwoHop { entry, exit },
+            RouteBinding::TwoHop { entry, exit, exit_address: "".to_owned() },
         )
         .unwrap();
         context.transition_connecting().unwrap();
@@ -349,3 +349,4 @@ mod tests {
         assert_eq!(invalid, PacketError::UnsupportedType { version: 7 });
     }
 }
+

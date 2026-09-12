@@ -45,6 +45,7 @@ async fn local_quic_session_binds_one_and_two_hop_routes() {
     let route = RouteBinding::TwoHop {
         entry: entry_identity.peer_id(),
         exit: exit_identity.peer_id(),
+        exit_address: "/ip4/127.0.0.1/udp/7002/quic-v1".to_owned(),
     };
     let initiator = SessionInitiator::new(
         client_identity.keypair(),

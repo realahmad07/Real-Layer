@@ -245,7 +245,7 @@ async fn main() -> Result<()> {
                                     }
                                     channels.insert(session_id, EncryptedChannel::open(session, CHANNEL_PROTOCOL_VERSION, 4096, 8).map_err(|error| anyhow::anyhow!("open channel: {error}"))?);
                                     if is_entry {
-                                        if let RouteBinding::TwoHop { exit, .. } = route.clone() {
+                                        if let RouteBinding::TwoHop { exit, exit_address, .. } = route.clone() {
                                             let relay_route = RouteBinding::OneHop { relay: exit };
                                             let initiator = SessionInitiator::new(
                                                 identity.keypair(),
@@ -268,9 +268,6 @@ async fn main() -> Result<()> {
                                                     relay_init: relay_init_bytes,
                                                 },
                                             );
-                                            // The prompt instructs to use exit.address. If exit is a PeerId, this will fail cargo check.
-                                            // We will try exit.address.to_string() and fix it if cargo check fails.
-                                            let exit_address = format!("/p2p/{}", exit);
                                             node.dial(&exit_address).unwrap_or_else(|e| warn!("failed to dial exit address: {}", e));
                                             info!(%client_session_id, %exit, "entry dialing exit for secure session");
                                         }
@@ -384,7 +381,7 @@ async fn main() -> Result<()> {
                                         exit_forwarding.entry(forwarded.forwarding_id)
                                     {
                                         let (route_entry, exit) = match forwarded.route.clone() {
-                                            RouteBinding::TwoHop { entry, exit } => (entry, exit),
+                                            RouteBinding::TwoHop { entry, exit, .. } => (entry, exit),
                                             // For one-hop, the client is the entry and this relay is the exit
                                             RouteBinding::OneHop { relay } => (client_peer, relay),
                                         };
@@ -505,7 +502,7 @@ async fn main() -> Result<()> {
                                         }
                                     };
                                     let response_frame = {
-                                        let channel_state = channels.get_mut(&forwarded.data.session_id).expect("exit relay session");
+                                        let channel_state = channels.get_mut(&forwarded.data.session_id).ok_or_else(|| anyhow::anyhow!("exit relay session missing for response"))?;
                                         DataPlane::open(channel_state, DEFAULT_MAXIMUM_PAYLOAD_SIZE)
                                             .map_err(|error| anyhow::anyhow!("open exit response data plane: {error}"))?
                                             .send(&response_payload)
@@ -536,7 +533,7 @@ async fn main() -> Result<()> {
                                             .map_err(|error| anyhow::anyhow!("decrypt client data: {error}"))?
                                             .payload
                                     };
-                                    let forwarding = client_forwarding.get_mut(&envelope.session_id).expect("client forwarding state");
+                                    let forwarding = client_forwarding.get_mut(&envelope.session_id).ok_or_else(|| anyhow::anyhow!("client forwarding state missing"))?;
                                     if forwarding.client_peer != peer_id {
                                         warn!(%peer_id, "rejected client data from an unbound peer");
                                     } else {
@@ -560,9 +557,9 @@ async fn main() -> Result<()> {
                                                 protocol: ForwardedProtocol::Tcp,
                                                 source: None,
                                                 destination: config
-                                                    .external_test_destination
-                                                    .as_deref()
-                                                    .ok_or_else(|| anyhow::anyhow!("external exit destination is not configured"))?
+                                                    .allowed_exit_destinations
+                                                    .first()
+                                                    .ok_or_else(|| anyhow::anyhow!("no allowed exit destination configured"))?
                                                     .parse()
                                                     .map_err(|_| anyhow::anyhow!("invalid configured forwarding destination"))?,
                                                 flow_id: forwarding.context.forwarding_id(),
@@ -610,7 +607,7 @@ async fn main() -> Result<()> {
                                     let session = pending.initiator.complete(response)?;
                                     let relay_session_id = session.session_id();
                                     channels.insert(relay_session_id, EncryptedChannel::open(session, CHANNEL_PROTOCOL_VERSION, 4096, 8).map_err(|error| anyhow::anyhow!("open relay channel: {error}"))?);
-                                    let RouteBinding::TwoHop { entry, exit } = pending.route.clone() else { unreachable!() };
+                                    let RouteBinding::TwoHop { entry, exit, .. } = pending.route.clone() else { unreachable!() };
                                     let mut context = ForwardingContext::new(pending.client_session_id, pending.client_peer, entry, exit, pending.route)?;
                                     context.transition_connecting()?;
                                     context.transition_established()?;
@@ -911,3 +908,4 @@ fn log_heartbeat(heartbeat: &RelayHeartbeat, health: RelayHealth) {
         "relay heartbeat"
     );
 }
+

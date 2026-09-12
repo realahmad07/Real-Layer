@@ -13,10 +13,7 @@ pub struct AndroidTunDevice {
 
 impl AndroidTunDevice {
     pub fn from_file(file: File, config: TunConfig) -> Self {
-        Self {
-            file,
-            config,
-        }
+        Self { file, config }
     }
 }
 

@@ -138,7 +138,7 @@ class BackendConnectionStatus {
 }
 
 class RealLayerBackendBridge {
-  RealLayerBackendBridge({this.baseUrl, this.repoRoot, this.healthPort = 8081});
+  RealLayerBackendBridge({this.baseUrl, this.repoRoot, this.healthPort = 8082});
 
   final String? baseUrl;
   final String? repoRoot;
@@ -221,17 +221,6 @@ class RealLayerBackendBridge {
     trace('connect start');
     _connecting = true;
     try {
-      if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) {
-        trace('connect bypass fetchStatus on mobile');
-        return BackendConnectionStatus(
-          alive: true,
-          ready: true,
-          health: 'healthy',
-          status: 'online',
-          latencyMs: 0,
-        );
-      }
-
       final current = await fetchStatus();
       trace(
         'connect initial current alive=${current.alive} ready=${current.ready} healthy=${current.healthy} uiState=${current.uiState.name}',
@@ -297,14 +286,21 @@ class RealLayerBackendBridge {
     }
 
     if (Platform.isAndroid || Platform.isIOS) {
-      trace('_startRelayIfNeeded aborted: Android/iOS cannot start host relay');
+      trace('_startRelayIfNeeded waiting for mobile VPN JNI to boot...');
+      for (var i = 0; i < 10; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        if (await _isReachable()) {
+          return true;
+        }
+      }
+      trace('_startRelayIfNeeded aborted: mobile JNI failed to reach health endpoint');
       return false;
     }
 
     final cargoCommand = Platform.isWindows ? 'cargo.exe' : 'cargo';
     final process = await Process.start(
       cargoCommand,
-      const ['run', '--bin', 'ghost-layer-relay'],
+      const ['run', '--bin', 'ghost-layer-client'],
       workingDirectory: workingDirectory,
       environment: {
         ...Platform.environment,

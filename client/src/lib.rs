@@ -3,17 +3,17 @@ use jni::objects::JClass;
 #[cfg(target_os = "android")]
 use jni::JNIEnv;
 #[cfg(target_os = "android")]
-use std::thread;
-#[cfg(target_os = "android")]
-use std::os::unix::io::FromRawFd;
-#[cfg(target_os = "android")]
 use std::fs::File;
 #[cfg(target_os = "android")]
 use std::io::{Read, Write};
 #[cfg(target_os = "android")]
+use std::os::unix::io::FromRawFd;
+#[cfg(target_os = "android")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "android")]
 use std::sync::Arc;
+#[cfg(target_os = "android")]
+use std::thread;
 
 #[cfg(target_os = "android")]
 static RUNNING: AtomicBool = AtomicBool::new(false);
@@ -24,7 +24,7 @@ extern "C" {
         priority: libc::c_int,
         tag: *const libc::c_char,
         format: *const libc::c_char,
-        ...,
+        ...
     ) -> libc::c_int;
 }
 
@@ -74,7 +74,10 @@ struct OwnedTunFile {
 #[cfg(target_os = "android")]
 impl OwnedTunFile {
     fn from_duplicated_fd(fd: i32, original_fd: i32, label: &str) -> Self {
-        println!("VPN_FD_RUST_OWNED label={} original={} fd={}", label, original_fd, fd);
+        println!(
+            "VPN_FD_RUST_OWNED label={} original={} fd={}",
+            label, original_fd, fd
+        );
         Self {
             file: unsafe { File::from_raw_fd(fd) },
             fd,
@@ -112,10 +115,7 @@ fn format_ipv4(bytes: &[u8]) -> String {
     if bytes.len() < 4 {
         return "invalid".to_string();
     }
-    format!(
-        "{}.{}.{}.{}",
-        bytes[0], bytes[1], bytes[2], bytes[3]
-    )
+    format!("{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3])
 }
 
 #[cfg(target_os = "android")]
@@ -138,7 +138,11 @@ fn log_tun_packet(direction: &str, packet: &[u8]) {
         return;
     }
 
-    println!("VPN_TUN_PACKET_RX length={} direction={}", packet.len(), direction);
+    println!(
+        "VPN_TUN_PACKET_RX length={} direction={}",
+        packet.len(),
+        direction
+    );
 
     let version = packet[0] >> 4;
     let protocol: u16 = if version == 4 {
@@ -158,15 +162,9 @@ fn log_tun_packet(direction: &str, packet: &[u8]) {
     };
 
     let (src, dst) = if version == 4 && packet.len() >= 20 {
-        (
-            format_ipv4(&packet[12..16]),
-            format_ipv4(&packet[16..20]),
-        )
+        (format_ipv4(&packet[12..16]), format_ipv4(&packet[16..20]))
     } else if version == 6 && packet.len() >= 40 {
-        (
-            format_ipv6(&packet[8..24]),
-            format_ipv6(&packet[24..40]),
-        )
+        (format_ipv6(&packet[8..24]), format_ipv6(&packet[24..40]))
     } else {
         ("unknown".to_string(), "unknown".to_string())
     };
@@ -257,12 +255,14 @@ pub extern "system" fn Java_com_example_magicblock_1app_RealLayerVpnService_star
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 while let Some(packet) = tun_rx_out.recv().await {
-                    if !write_running_clone.load(Ordering::SeqCst) { break; }
+                    if !write_running_clone.load(Ordering::SeqCst) {
+                        break;
+                    }
                     let _ = write_file.write_all(&packet);
                 }
             });
         });
-        
+
         // Inject node configuration for Android environment.
         // 10.0.2.2 is the Android emulator's alias for the host loopback.
         // These values must match the running relay on the host.
@@ -273,7 +273,10 @@ pub extern "system" fn Java_com_example_magicblock_1app_RealLayerVpnService_star
             std::env::set_var("GHOST_NETWORK_ENVIRONMENT", "development");
             std::env::set_var("GHOST_RELAY_ROLE", "client");
             std::env::set_var("GHOST_LOG_LEVEL", "info");
-            std::env::set_var("GHOST_IDENTITY_PATH", "/data/data/com.example.magicblock_app/files/ghost-layer.key");
+            std::env::set_var(
+                "GHOST_IDENTITY_PATH",
+                "/data/data/com.example.magicblock_app/files/ghost-layer.key",
+            );
             std::env::set_var(
                 "GHOST_BOOTSTRAP_PEERS",
                 "/ip4/10.0.2.2/udp/7000/quic-v1/p2p/12D3KooWF9mfD7d2VEabciAStgdfiSA1pXi5rcyYmpSne2aXyDN6",
@@ -293,7 +296,7 @@ pub extern "system" fn Java_com_example_magicblock_1app_RealLayerVpnService_star
         if let Err(e) = rt.block_on(engine::run_client(Some(tun_rx_in), Some(tun_tx_out))) {
             println!("Engine failed: {}", e);
         }
-        
+
         write_running.store(false, Ordering::SeqCst);
         println!("Native VPN Core terminated.");
     });

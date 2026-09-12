@@ -55,6 +55,8 @@ async fn main() -> Result<()> {
         required_transport: requirements.required_transport.clone(),
         required_capabilities: requirements.required_capabilities.clone(),
     };
+    let client_state = Arc::new(RwLock::new(ClientState::default()));
+    let _health_server = spawn_client_health_server(client_state.clone());
     let mut candidates = Vec::new();
     let mut pending_session: Option<SessionInitiator> = None;
     let mut active_channel: Option<EncryptedChannel> = None;
@@ -368,6 +370,7 @@ async fn main() -> Result<()> {
                                                         RouteBinding::TwoHop {
                                                             entry: entry.peer_id,
                                                             exit: exit.peer_id,
+                                                            exit_address: exit.address.to_string(),
                                                         },
                                                     ),
                                                 };
@@ -543,4 +546,75 @@ fn log_event(event: &NetworkEvent) {
         NetworkEvent::NetworkError { message } => error!(%message, "network error"),
         NetworkEvent::DiscoveryRequest { .. } | NetworkEvent::DiscoveryResponse { .. } => {}
     }
+}
+
+
+use serde::Serialize;
+use std::sync::{Arc, RwLock};
+use std::io::{Read, Write};
+
+#[derive(Serialize, Clone)]
+pub struct ClientState {
+    pub alive: bool,
+    pub ready: bool,
+    pub health: String,
+    pub status: String,
+    pub route: String,
+}
+
+impl Default for ClientState {
+    fn default() -> Self {
+        Self {
+            alive: true,
+            ready: false,
+            health: "unhealthy".to_owned(),
+            status: "disconnected".to_owned(),
+            route: "none".to_owned(),
+        }
+    }
+}
+
+pub fn spawn_client_health_server(state: Arc<RwLock<ClientState>>) -> Result<std::thread::JoinHandle<()>> {
+    let address = "127.0.0.1:8082".to_owned();
+    let listener = std::net::TcpListener::bind(&address)
+        .context("bind client health endpoint")?;
+    listener.set_nonblocking(true).context("configure client health endpoint")?;
+    Ok(std::thread::spawn(move || {
+        tracing::info!(%address, "client health endpoint listening");
+        let mut running = true;
+        while running {
+            match listener.accept() {
+                Ok((mut stream, _addr)) => {
+                    let state = state.clone();
+                    std::thread::spawn(move || {
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(5000)));
+                        let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(5000)));
+                        let mut request = [0u8; 512];
+                        let bytes_read = stream.read(&mut request).unwrap_or(0);
+                        if bytes_read == 0 { return; }
+                        let current_state = { state.read().unwrap().clone() };
+                        let body = serde_json::to_string(&current_state).unwrap_or_else(|_| "{}".to_owned());
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    if !state.read().unwrap().alive {
+                        running = false;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "client health endpoint accept failed");
+                    break;
+                }
+            }
+        }
+    }))
 }

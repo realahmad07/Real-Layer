@@ -144,7 +144,7 @@ impl ForwardingContext {
         route: RouteBinding,
     ) -> Result<Self, ForwardingError> {
         match route {
-            RouteBinding::TwoHop { entry, exit }
+            RouteBinding::TwoHop { entry, exit, .. }
                 if entry == entry_peer && exit == exit_peer && entry != exit => {}
             _ => return Err(ForwardingError::InvalidRoute),
         }
@@ -388,7 +388,7 @@ mod tests {
             client,
             entry,
             exit,
-            RouteBinding::TwoHop { entry, exit },
+            RouteBinding::TwoHop { entry, exit, exit_address: "".to_owned() },
         )
         .unwrap()
     }
@@ -434,10 +434,7 @@ mod tests {
                 client,
                 entry,
                 exit,
-                RouteBinding::TwoHop {
-                    entry,
-                    exit: PeerId::random(),
-                },
+                RouteBinding::TwoHop { entry, exit: PeerId::random(), exit_address: "".to_owned() },
             ),
             Err(ForwardingError::InvalidRoute)
         ));
@@ -529,3 +526,4 @@ mod tests {
         );
     }
 }
+

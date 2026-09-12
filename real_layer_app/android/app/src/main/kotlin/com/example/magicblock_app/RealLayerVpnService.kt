@@ -48,7 +48,8 @@ class RealLayerVpnService : VpnService() {
         val builder = Builder()
             .setSession("Real Layer")
             .addAddress("10.8.0.1", 24)
-            .addRoute("0.0.0.0", 0)
+            .addRoute("8.8.8.8", 32)
+            .addRoute("1.1.1.1", 32)
             .addDnsServer("8.8.8.8")
             .setMtu(1500)
 

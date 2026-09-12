@@ -36,6 +36,8 @@ pub async fn run_client(mut tun_rx: Option<tokio::sync::mpsc::UnboundedReceiver<
         required_transport: requirements.required_transport.clone(),
         required_capabilities: requirements.required_capabilities.clone(),
     };
+    let client_state = Arc::new(RwLock::new(ClientState::default()));
+    let _health_server = spawn_client_health_server(client_state.clone());
     let mut candidates = Vec::new();
     let mut pending_session: Option<SessionInitiator> = None;
     let mut active_channel: Option<EncryptedChannel> = None;
@@ -59,7 +61,7 @@ pub async fn run_client(mut tun_rx: Option<tokio::sync::mpsc::UnboundedReceiver<
         tokio::select! {
             Some(packet) = async { if let Some(rx) = tun_rx.as_mut() { rx.recv().await } else { futures::future::pending().await } } => {
                 if let (Some(channel), Some(route), Some(exit)) = (active_channel.as_mut(), active_route.as_ref(), exit_peer.as_ref()) {
-                    let session_id = current_session_id.unwrap();
+                    let session_id = current_session_id.expect("session ID must be present if channel is active");
                     if let Some((dns_dest, src_port, dns_payload)) = extract_dns_payload(&packet) {
                         match DataPlane::open(channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE) {
                             Ok(mut data_plane) => {
@@ -173,9 +175,15 @@ pub async fn run_client(mut tun_rx: Option<tokio::sync::mpsc::UnboundedReceiver<
                                                     exit_peer = Some(*relay);
                                                 }
                                             }
-                                            active_route = Some(route);
+                                            active_route = Some(route.clone());
                                             if let Ok(channel) = EncryptedChannel::open(session, CHANNEL_PROTOCOL_VERSION, 4096, 8) {
                                                 active_channel = Some(channel);
+                                                if let Ok(mut state) = client_state.write() {
+                                                    state.ready = true;
+                                                    state.health = "healthy".to_owned();
+                                                    state.status = "online".to_owned();
+                                                    state.route = format!("{:?}", route);
+                                                }
                                             }
                                         }
                                     }
@@ -226,7 +234,7 @@ pub async fn run_client(mut tun_rx: Option<tokio::sync::mpsc::UnboundedReceiver<
                                         if pending_session.is_none() {
                                             let (first_peer, binding) = match &route {
                                                 Route::OneHop { relay } => (relay.peer_id, RouteBinding::OneHop { relay: relay.peer_id }),
-                                                Route::TwoHop { entry, exit } => (entry.peer_id, RouteBinding::TwoHop { entry: entry.peer_id, exit: exit.peer_id }),
+                                                Route::TwoHop { entry, exit } => (entry.peer_id, RouteBinding::TwoHop { entry: entry.peer_id, exit: exit.peer_id, exit_address: exit.address.to_string() }),
                                             };
                                             if let Ok(initiator) = SessionInitiator::new(identity.keypair(), first_peer, binding, config.protocol_version.clone()) {
                                                 if let Ok(init) = initiator.build_init() {
@@ -241,6 +249,24 @@ pub async fn run_client(mut tun_rx: Option<tokio::sync::mpsc::UnboundedReceiver<
                                     }
                                 }
                             }
+                        }
+                        NetworkEvent::PeerDisconnected { peer_id: disconnected_peer } => {
+                            if Some(disconnected_peer) == exit_peer || active_route.as_ref().is_some_and(|r| match r {
+                                RouteBinding::OneHop { relay } => *relay == disconnected_peer,
+                                RouteBinding::TwoHop { entry, .. } => *entry == disconnected_peer,
+                            }) {
+                                active_channel = None;
+                                active_route = None;
+                                current_session_id = None;
+                                exit_peer = None;
+                                if let Ok(mut state) = client_state.write() {
+                                    state.ready = false;
+                                    state.health = "unhealthy".to_owned();
+                                    state.status = "disconnected".to_owned();
+                                    state.route = "none".to_owned();
+                                }
+                            }
+                            log_event(&NetworkEvent::PeerDisconnected { peer_id: disconnected_peer });
                         }
                         event => log_event(&event),
                     }
@@ -466,4 +492,75 @@ fn ipv4_checksum(header: &[u8]) -> u16 {
         sum = (sum & 0xffff) + (sum >> 16);
     }
     !(sum as u16)
+}
+
+
+use serde::Serialize;
+use std::sync::{Arc, RwLock};
+use std::io::{Read, Write};
+
+#[derive(Serialize, Clone)]
+pub struct ClientState {
+    pub alive: bool,
+    pub ready: bool,
+    pub health: String,
+    pub status: String,
+    pub route: String,
+}
+
+impl Default for ClientState {
+    fn default() -> Self {
+        Self {
+            alive: true,
+            ready: false,
+            health: "unhealthy".to_owned(),
+            status: "disconnected".to_owned(),
+            route: "none".to_owned(),
+        }
+    }
+}
+
+pub fn spawn_client_health_server(state: Arc<RwLock<ClientState>>) -> Result<std::thread::JoinHandle<()>> {
+    let address = "127.0.0.1:8082".to_owned();
+    let listener = std::net::TcpListener::bind(&address)
+        .context("bind client health endpoint")?;
+    listener.set_nonblocking(true).context("configure client health endpoint")?;
+    Ok(std::thread::spawn(move || {
+        tracing::info!(%address, "client health endpoint listening");
+        let mut running = true;
+        while running {
+            match listener.accept() {
+                Ok((mut stream, _addr)) => {
+                    let state = state.clone();
+                    std::thread::spawn(move || {
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(5000)));
+                        let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(5000)));
+                        let mut request = [0u8; 512];
+                        let bytes_read = stream.read(&mut request).unwrap_or(0);
+                        if bytes_read == 0 { return; }
+                        let current_state = { state.read().unwrap().clone() };
+                        let body = serde_json::to_string(&current_state).unwrap_or_else(|_| "{}".to_owned());
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    if !state.read().unwrap().alive {
+                        running = false;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "client health endpoint accept failed");
+                    break;
+                }
+            }
+        }
+    }))
 }
