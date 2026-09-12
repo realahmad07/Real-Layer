@@ -59,3 +59,6 @@ Thumbs.db
 
 # Flutter ephemeral files
 **/ios/Flutter/ephemeral/
+
+# Generated Android native binaries
+real_layer_app/android/app/src/main/jniLibs/**/*.so
