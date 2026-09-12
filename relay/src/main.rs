@@ -296,7 +296,8 @@ async fn main() -> Result<()> {
                                     );
                                 } else if matches!(config.relay_role, ghost_layer_network::RelayRole::Entry) {
                                     warn!(%peer_id, "rejected exit forwarding on entry-only relay");
-                                } else if !matches!(&forwarded.route, RouteBinding::TwoHop { exit, .. } if *exit == identity.peer_id()) {
+                                } else if !matches!(&forwarded.route, RouteBinding::TwoHop { exit, .. } if *exit == identity.peer_id())
+                                    && !matches!(&forwarded.route, RouteBinding::OneHop { relay } if *relay == identity.peer_id()) {
                                     warn!(%peer_id, "rejected forwarding message for a different exit");
                                 } else if forwarded.client_peer.parse::<PeerId>().ok().is_none() {
                                     warn!("rejected forwarding message with malformed client peer");
@@ -305,10 +306,11 @@ async fn main() -> Result<()> {
                                     if let std::collections::hash_map::Entry::Vacant(vacant_entry) =
                                         exit_forwarding.entry(forwarded.forwarding_id)
                                     {
-                                        let RouteBinding::TwoHop {
-                                            entry: route_entry,
-                                            exit,
-                                        } = forwarded.route.clone() else { unreachable!() };
+                                        let (route_entry, exit) = match forwarded.route.clone() {
+                                            RouteBinding::TwoHop { entry, exit } => (entry, exit),
+                                            // For one-hop, the client is the entry and this relay is the exit
+                                            RouteBinding::OneHop { relay } => (client_peer, relay),
+                                        };
                                         let mut context = ForwardingContext::with_forwarding_id(
                                             forwarded.forwarding_id,
                                             forwarded.client_session_id,
@@ -349,6 +351,7 @@ async fn main() -> Result<()> {
                                         entry_peer: peer_id,
                                         exit_peer: identity.peer_id(),
                                     };
+                                    'packet_exit: {
                                     let (response_payload, destination_label) = match forwarded.packet.as_ref().map(|packet| packet.protocol) {
                                         Some(ForwardedProtocol::Udp) => {
                                             if !config.udp_enabled { return Err(anyhow::anyhow!("UDP runtime is disabled")); }
@@ -410,9 +413,14 @@ async fn main() -> Result<()> {
                                             (response, destination.to_owned())
                                         }
                                         Some(ForwardedProtocol::Ip) => {
-                                            return Err(anyhow::anyhow!("IP forwarding not yet fully implemented on this exit relay"));
+                                            // Raw IP NAT not yet implemented — drop packet without crashing the relay.
+                                            warn!("IP protocol forwarding is not implemented on this exit relay, dropping packet");
+                                            break 'packet_exit;
                                         }
-                                        None => return Err(anyhow::anyhow!("forwarding protocol metadata is missing")),
+                                        None => {
+                                            warn!("forwarding protocol metadata is missing, dropping packet");
+                                            break 'packet_exit;
+                                        }
                                     };
                                     let response_frame = {
                                         let channel_state = channels.get_mut(&forwarded.data.session_id).expect("exit relay session");
@@ -432,7 +440,8 @@ async fn main() -> Result<()> {
                                     };
                                     node.respond_to_discovery(channel, serde_json::to_vec(&response)?)?;
                                     info!(forwarding_id = %response.forwarding_id, destination = %destination_label, "exit returned protocol response");
-                                }
+                                    } // end 'packet_exit block
+                                } // end else (exit handler)
                             }
                         } else if let Ok(envelope) = serde_json::from_slice::<DataPlaneEnvelope>(&payload) {
                             if envelope.kind == DATA_PLANE_KIND {

@@ -60,54 +60,56 @@ pub async fn run_client(mut tun_rx: Option<tokio::sync::mpsc::UnboundedReceiver<
             Some(packet) = async { if let Some(rx) = tun_rx.as_mut() { rx.recv().await } else { futures::future::pending().await } } => {
                 if let (Some(channel), Some(route), Some(exit)) = (active_channel.as_mut(), active_route.as_ref(), exit_peer.as_ref()) {
                     let session_id = current_session_id.unwrap();
-                    let packet_length = packet.len();
-                    let envelope = match DataPlane::open(channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE) {
-                        Ok(mut data_plane) => match MtuPolicy::new(config.tun.mtu, config.tun.maximum_packet_size) {
-                            Ok(mtu) => match PacketPipeline::new(mtu, &mut data_plane).send(packet.clone()) {
-                                Ok(envelope) => envelope,
-                                Err(error) => {
-                                    warn!(?error, "rejected Android TUN packet before relay");
-                                    continue;
+                    if let Some((dns_dest, src_port, dns_payload)) = extract_dns_payload(&packet) {
+                        match DataPlane::open(channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE) {
+                            Ok(mut data_plane) => {
+                                match data_plane.send(&dns_payload) {
+                                    Ok(frame) => {
+                                        let envelope = DataPlaneEnvelope {
+                                            kind: DATA_PLANE_KIND.to_owned(),
+                                            session_id,
+                                            frame,
+                                        };
+                                        let message = ForwardingMessage {
+                                            kind: FORWARDING_KIND.to_owned(),
+                                            forwarding_id: session_id,
+                                            client_session_id: session_id,
+                                            client_peer: peer_id.to_string(),
+                                            route: route.clone(),
+                                            data: envelope,
+                                            packet: Some(ForwardedPacket {
+                                                protocol: ForwardedProtocol::Dns,
+                                                source: Some(std::net::SocketAddr::new(
+                                                    std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 8, 0, 1)),
+                                                    src_port,
+                                                )),
+                                                destination: dns_dest,
+                                                flow_id: session_id,
+                                                session_id,
+                                                route_id: session_id,
+                                                sequence: 1,
+                                                payload: dns_payload,
+                                            }),
+                                        };
+                                        if let Ok(payload) = serde_json::to_vec(&message) {
+                                            println!("VPN_PACKET_TX_TO_RELAY length={} protocol=dns dest={}", packet.len(), dns_dest);
+                                            node.request_discovery(*exit, payload);
+                                        }
+                                    }
+                                    Err(error) => {
+                                        warn!(?error, "failed to encrypt DNS payload for relay");
+                                    }
                                 }
-                            },
+                            }
                             Err(error) => {
-                                warn!(?error, "invalid Android TUN packet policy");
-                                continue;
+                                warn!(?error, "unable to open data plane for DNS packet");
                             }
-                        },
-                        Err(error) => {
-                            warn!(?error, "unable to open data plane for Android TUN packet");
-                            continue;
                         }
-                    };
-                    {
-                            let envelope = DataPlaneEnvelope {
-                                kind: envelope.kind,
-                                session_id,
-                                frame: envelope.frame,
-                            };
-                            let message = ForwardingMessage {
-                                kind: FORWARDING_KIND.to_owned(),
-                                forwarding_id: session_id,
-                                client_session_id: session_id,
-                                client_peer: peer_id.to_string(),
-                                route: route.clone(),
-                                data: envelope,
-                                packet: Some(ForwardedPacket {
-                                    protocol: ForwardedProtocol::Ip,
-                                    source: None,
-                                    destination: "0.0.0.0:0".parse().unwrap(),
-                                    flow_id: session_id,
-                                    session_id,
-                                    route_id: session_id,
-                                    sequence: 1,
-                                    payload: packet,
-                                }),
-                            };
-                            if let Ok(payload) = serde_json::to_vec(&message) {
-                                println!("VPN_PACKET_TX_TO_RELAY length={}", packet_length);
-                                node.request_discovery(*exit, payload);
-                            }
+                    } else {
+                        // Non-DNS packet: raw IP NAT is not yet implemented on the relay.
+                        // Log and skip – relay would crash if we sent ForwardedProtocol::Ip.
+                        println!("VPN_NON_DNS_PACKET_SKIPPED len={} ver={}", packet.len(),
+                            if packet.is_empty() { 0 } else { packet[0] >> 4 });
                     }
                 }
             }
@@ -132,8 +134,13 @@ pub async fn run_client(mut tun_rx: Option<tokio::sync::mpsc::UnboundedReceiver<
                                             current_session_id = Some(session.session_id());
                                             info!(session_id = %session.session_id(), peer = %session.peer_id(), route = ?session.route(), "secure session established");
                                             let route = session.route().clone();
-                                            if let RouteBinding::TwoHop { exit, .. } = route {
-                                                exit_peer = Some(exit);
+                                            match &route {
+                                                RouteBinding::TwoHop { exit, .. } => {
+                                                    exit_peer = Some(*exit);
+                                                }
+                                                RouteBinding::OneHop { relay } => {
+                                                    exit_peer = Some(*relay);
+                                                }
                                             }
                                             active_route = Some(route);
                                             if let Ok(channel) = EncryptedChannel::open(session, CHANNEL_PROTOCOL_VERSION, 4096, 8) {
@@ -147,10 +154,34 @@ pub async fn run_client(mut tun_rx: Option<tokio::sync::mpsc::UnboundedReceiver<
                                     if let Some(channel) = active_channel.as_mut() {
                                         if let Ok(mut data_plane) = DataPlane::open(channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE) {
                                             if let Ok(received) = data_plane.receive(&message.data) {
-                                                    println!("VPN_PACKET_RX_FROM_RELAY length={}", received.payload.len());
+                                                println!("VPN_PACKET_RX_FROM_RELAY length={}", received.payload.len());
                                                 if let Some(tx) = tun_tx.as_ref() {
-                                                    let _ = tx.send(received.payload);
-                                                        println!("VPN_PACKET_TX_TO_TUN");
+                                                    // Wrap DNS response bytes back into a valid IP/UDP packet
+                                                    // so Android's IP stack accepts it.
+                                                    let tun_packet = if let Some(fwd_packet) = message.packet.as_ref() {
+                                                        if matches!(fwd_packet.protocol, ForwardedProtocol::Dns) {
+                                                            let dst_port = fwd_packet.source
+                                                                .map(|s| s.port())
+                                                                .unwrap_or(12345);
+                                                            let dns_server_ip = match fwd_packet.destination.ip() {
+                                                                std::net::IpAddr::V4(ip) => ip.octets(),
+                                                                _ => [8u8, 8, 8, 8],
+                                                            };
+                                                            build_dns_response_packet(
+                                                                &received.payload,
+                                                                dns_server_ip,
+                                                                [10u8, 8, 0, 1],
+                                                                53,
+                                                                dst_port,
+                                                            )
+                                                        } else {
+                                                            received.payload
+                                                        }
+                                                    } else {
+                                                        received.payload
+                                                    };
+                                                    let _ = tx.send(tun_packet);
+                                                    println!("VPN_PACKET_TX_TO_TUN");
                                                 }
                                             }
                                         }
@@ -313,4 +344,95 @@ fn log_event(event: &NetworkEvent) {
         NetworkEvent::NetworkError { message } => error!(%message, "network error"),
         NetworkEvent::DiscoveryRequest { .. } | NetworkEvent::DiscoveryResponse { .. } => {}
     }
+}
+
+/// Extract a DNS query from a raw IPv4 TUN packet.
+/// Returns `Some((dns_server_dest, client_source_port, raw_dns_bytes))` for IPv4/UDP packets
+/// destined for port 53, or `None` for all other packets.
+fn extract_dns_payload(packet: &[u8]) -> Option<(std::net::SocketAddr, u16, Vec<u8>)> {
+    if packet.len() < 28 {
+        return None; // too short for IPv4 (20) + UDP (8)
+    }
+    if packet[0] >> 4 != 4 {
+        return None; // not IPv4
+    }
+    if packet[9] != 17 {
+        return None; // protocol not UDP
+    }
+    let ip_header_len = ((packet[0] & 0x0f) as usize) * 4;
+    if packet.len() < ip_header_len + 8 {
+        return None;
+    }
+    let src_port = u16::from_be_bytes([packet[ip_header_len], packet[ip_header_len + 1]]);
+    let dst_port = u16::from_be_bytes([packet[ip_header_len + 2], packet[ip_header_len + 3]]);
+    if dst_port != 53 {
+        return None; // not DNS
+    }
+    let dst_ip = std::net::Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
+    let dns_payload = packet[ip_header_len + 8..].to_vec();
+    Some((
+        std::net::SocketAddr::new(std::net::IpAddr::V4(dst_ip), 53),
+        src_port,
+        dns_payload,
+    ))
+}
+
+/// Build a minimal IPv4/UDP packet wrapping `dns_response` bytes.
+/// Used to reconstruct the return packet that Android's resolver expects on the TUN.
+fn build_dns_response_packet(
+    dns_response: &[u8],
+    src_ip: [u8; 4],
+    dst_ip: [u8; 4],
+    src_port: u16,
+    dst_port: u16,
+) -> Vec<u8> {
+    let udp_payload_len = 8 + dns_response.len();
+    let ip_total_len = 20 + udp_payload_len;
+    let mut packet = vec![0u8; ip_total_len];
+
+    // IPv4 header
+    packet[0] = 0x45; // version=4, IHL=5
+    packet[1] = 0x00;
+    packet[2] = (ip_total_len >> 8) as u8;
+    packet[3] = ip_total_len as u8;
+    packet[4] = 0x00;
+    packet[5] = 0x00;
+    packet[6] = 0x40;
+    packet[7] = 0x00; // flags: DF
+    packet[8] = 64;   // TTL
+    packet[9] = 17;   // protocol: UDP
+    packet[12..16].copy_from_slice(&src_ip);
+    packet[16..20].copy_from_slice(&dst_ip);
+    let checksum = ipv4_checksum(&packet[0..20]);
+    packet[10] = (checksum >> 8) as u8;
+    packet[11] = checksum as u8;
+
+    // UDP header at offset 20
+    packet[20] = (src_port >> 8) as u8;
+    packet[21] = src_port as u8;
+    packet[22] = (dst_port >> 8) as u8;
+    packet[23] = dst_port as u8;
+    packet[24] = (udp_payload_len >> 8) as u8;
+    packet[25] = udp_payload_len as u8;
+    packet[26] = 0x00;
+    packet[27] = 0x00; // UDP checksum disabled
+
+    packet[28..].copy_from_slice(dns_response);
+    packet
+}
+
+fn ipv4_checksum(header: &[u8]) -> u16 {
+    let mut sum: u32 = 0;
+    for chunk in header.chunks(2) {
+        let word = if chunk.len() == 2 {
+            ((chunk[0] as u32) << 8) | (chunk[1] as u32)
+        } else {
+            (chunk[0] as u32) << 8
+        };
+        sum += word;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
 }

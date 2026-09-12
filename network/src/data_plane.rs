@@ -4,7 +4,7 @@ use std::fmt;
 
 pub const DATA_PLANE_PROTOCOL_VERSION: &str = "1.0";
 pub const DATA_PLANE_KIND: &str = "data_plane";
-pub const DEFAULT_MAXIMUM_PAYLOAD_SIZE: usize = 1024;
+pub const DEFAULT_MAXIMUM_PAYLOAD_SIZE: usize = 1500;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DataPlaneEnvelope {
