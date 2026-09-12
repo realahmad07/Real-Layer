@@ -22,4 +22,4 @@ x25519-dalek.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-tun = "0.8.14"
+tun = { version = "0.8.14", features = ["async"] }

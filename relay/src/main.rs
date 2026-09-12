@@ -76,6 +76,31 @@ async fn main() -> Result<()> {
     let mut pending_client_forwards: HashMap<DiscoveryRequestId, PendingClientForward> =
         HashMap::new();
     let mut exit_forwarding: HashMap<SessionId, ForwardingContext> = HashMap::new();
+    let mut active_exit_relay_session: Option<ghost_layer_network::SessionId> = None;
+
+    let mut tun_tx_channel = None;
+    let mut tun_writer_opt = None;
+    if config.tun.enabled {
+        #[cfg(windows)]
+        {
+            let tun_device = ghost_layer_network::tun::windows::WindowsTunDevice::open(config.tun.clone())
+                .map_err(|error| anyhow::anyhow!("open tun device: {error}"))?;
+            let (mut tun_reader, tun_writer) = tun_device.split();
+            let (tx, rx) = tokio::sync::mpsc::channel(1024);
+            tun_tx_channel = Some(rx);
+            tun_writer_opt = Some(tun_writer);
+            std::thread::spawn(move || {
+                loop {
+                    if let Ok(Some(packet)) = tun_reader.read_packet() {
+                        if tx.blocking_send(packet.as_bytes().to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+    }
+
     let mut udp_nat = if config.nat_enabled {
         Some(
             NatTable::new(
@@ -131,6 +156,42 @@ async fn main() -> Result<()> {
     }
     loop {
         tokio::select! {
+            Some(payload) = async { if let Some(rx) = tun_tx_channel.as_mut() { rx.recv().await } else { futures::future::pending().await } } => {
+                if let Some(forwarding) = exit_forwarding.values().next() {
+                    if let Some(relay_session_id) = active_exit_relay_session {
+                        let response_frame = {
+                            if let Some(channel_state) = channels.get_mut(&relay_session_id) {
+                                if let Ok(mut data_plane) = ghost_layer_network::DataPlane::open(channel_state, ghost_layer_network::DEFAULT_MAXIMUM_PAYLOAD_SIZE) {
+                                    data_plane.send(&payload).ok()
+                                } else { None }
+                            } else { None }
+                        };
+                        if let Some(frame) = response_frame {
+                            let response = ForwardingMessage {
+                                kind: FORWARDING_KIND.to_owned(),
+                                forwarding_id: forwarding.forwarding_id(),
+                                client_session_id: forwarding.client_session_id(),
+                                client_peer: forwarding.client_peer().to_string(),
+                                route: forwarding.route().clone(),
+                                data: ghost_layer_network::DataPlaneEnvelope { kind: DATA_PLANE_KIND.to_owned(), session_id: relay_session_id, frame },
+                                packet: Some(ForwardedPacket {
+                                    protocol: ForwardedProtocol::Ip,
+                                    source: None,
+                                    destination: "0.0.0.0:0".parse().unwrap(),
+                                    flow_id: forwarding.forwarding_id(),
+                                    session_id: forwarding.client_session_id(),
+                                    route_id: forwarding.forwarding_id(),
+                                    sequence: 1,
+                                    payload,
+                                }),
+                            };
+                            if let Ok(response_payload) = serde_json::to_vec(&response) {
+                                let _ = node.request_discovery(forwarding.entry_peer(), response_payload);
+                            }
+                        }
+                    }
+                }
+            }
             event = node.swarm.next() => {
                 let Some(event) = event else { break };
                 if let Some(event) = node.translate_event(event) {
@@ -327,6 +388,7 @@ async fn main() -> Result<()> {
                                     let context = exit_forwarding.get_mut(&forwarded.forwarding_id).expect("exit forwarding context");
                                     context.validate_message(&forwarded).map_err(|error| anyhow::anyhow!("validate forwarding message: {error}"))?;
                                     context.validate_entry(peer_id).map_err(|error| anyhow::anyhow!("validate entry peer: {error}"))?;
+                                    active_exit_relay_session = Some(forwarded.data.session_id);
                                     context.validate_relay_session(forwarded.data.session_id).map_err(|error| anyhow::anyhow!("validate relay session: {error}"))?;
                                     let packet = forwarded.packet.as_ref().expect("validated packet metadata");
                                     context.accept_sequence(packet.sequence).map_err(|error| anyhow::anyhow!("validate forwarding sequence: {error}"))?;
@@ -413,8 +475,12 @@ async fn main() -> Result<()> {
                                             (response, destination.to_owned())
                                         }
                                         Some(ForwardedProtocol::Ip) => {
-                                            // Raw IP NAT not yet implemented — drop packet without crashing the relay.
-                                            warn!("IP protocol forwarding is not implemented on this exit relay, dropping packet");
+                                            #[cfg(windows)]
+                                            if let Some(writer) = tun_writer_opt.as_mut() {
+                                                if let Ok(packet) = ghost_layer_network::packet::NetworkPacket::new(incoming.payload.clone(), config.tun.maximum_packet_size, config.tun.mtu) {
+                                                    let _ = writer.write_packet(packet);
+                                                }
+                                            }
                                             break 'packet_exit;
                                         }
                                         None => {

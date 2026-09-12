@@ -106,10 +106,41 @@ pub async fn run_client(mut tun_rx: Option<tokio::sync::mpsc::UnboundedReceiver<
                             }
                         }
                     } else {
-                        // Non-DNS packet: raw IP NAT is not yet implemented on the relay.
-                        // Log and skip – relay would crash if we sent ForwardedProtocol::Ip.
-                        println!("VPN_NON_DNS_PACKET_SKIPPED len={} ver={}", packet.len(),
-                            if packet.is_empty() { 0 } else { packet[0] >> 4 });
+                        // Non-DNS packet: send as ForwardedProtocol::Ip
+                        if packet.len() >= 20 {
+                            let dst_ip = std::net::Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
+                            if let Ok(mut data_plane) = DataPlane::open(channel, DEFAULT_MAXIMUM_PAYLOAD_SIZE) {
+                                if let Ok(frame) = data_plane.send(&packet) {
+                                    let envelope = DataPlaneEnvelope {
+                                        kind: DATA_PLANE_KIND.to_owned(),
+                                        session_id,
+                                        frame,
+                                    };
+                                    let message = ForwardingMessage {
+                                        kind: FORWARDING_KIND.to_owned(),
+                                        forwarding_id: session_id,
+                                        client_session_id: session_id,
+                                        client_peer: peer_id.to_string(),
+                                        route: route.clone(),
+                                        data: envelope,
+                                        packet: Some(ForwardedPacket {
+                                            protocol: ForwardedProtocol::Ip,
+                                            source: Some(std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 8, 0, 1)), 0)),
+                                            destination: std::net::SocketAddr::new(std::net::IpAddr::V4(dst_ip), 0),
+                                            flow_id: session_id,
+                                            session_id,
+                                            route_id: session_id,
+                                            sequence: 1,
+                                            payload: packet.clone(),
+                                        }),
+                                    };
+                                    if let Ok(payload) = serde_json::to_vec(&message) {
+                                        println!("VPN_PACKET_TX_TO_RELAY length={} protocol=ip dest={}", packet.len(), dst_ip);
+                                        node.request_discovery(*exit, payload);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -9,6 +9,54 @@ pub struct WindowsTunDevice {
     closed: bool,
 }
 
+pub struct WindowsTunReader {
+    reader: tun::Reader,
+    config: TunConfig,
+}
+
+impl WindowsTunReader {
+    pub fn read_packet(&mut self) -> Result<Option<NetworkPacket>, TunError> {
+        let mut buffer = vec![0u8; self.config.maximum_packet_size];
+        let size = self
+            .reader
+            .read(&mut buffer)
+            .map_err(|error| TunError::ReadFailed(error.to_string()))?;
+        if size == 0 {
+            return Ok(None);
+        }
+        buffer.truncate(size);
+        NetworkPacket::new(buffer, self.config.maximum_packet_size, self.config.mtu)
+            .map(Some)
+            .map_err(TunError::InvalidPacket)
+    }
+}
+
+pub struct WindowsTunWriter {
+    writer: tun::Writer,
+    config: TunConfig,
+}
+
+impl WindowsTunWriter {
+    pub fn write_packet(&mut self, packet: NetworkPacket) -> Result<(), TunError> {
+        if packet.len() > self.config.maximum_packet_size || packet.len() > self.config.mtu {
+            return Err(TunError::InvalidPacket(
+                crate::packet::PacketError::Oversized {
+                    size: packet.len(),
+                    maximum: self.config.maximum_packet_size,
+                },
+            ));
+        }
+        let written = self
+            .writer
+            .write(packet.as_bytes())
+            .map_err(|error| TunError::WriteFailed(error.to_string()))?;
+        if written != packet.len() {
+            return Err(TunError::WriteFailed("short device write".to_owned()));
+        }
+        Ok(())
+    }
+}
+
 impl WindowsTunDevice {
     pub fn open(config: TunConfig) -> Result<Self, TunError> {
         config
@@ -34,6 +82,14 @@ impl WindowsTunDevice {
             config,
             closed: false,
         })
+    }
+
+    pub fn split(self) -> (WindowsTunReader, WindowsTunWriter) {
+        let (reader, writer) = self.device.split();
+        (
+            WindowsTunReader { reader, config: self.config.clone() },
+            WindowsTunWriter { writer, config: self.config },
+        )
     }
 }
 

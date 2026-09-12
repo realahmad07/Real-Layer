@@ -3020,12 +3020,16 @@ checksum = "8bb55e468c585e02ef89ba7a1a9848871ac942dfc64547ad4d1166b0f61a98be"
 dependencies = [
  "bytes",
  "cfg-if",
+ "futures",
+ "futures-core",
  "ipnet",
  "libc",
  "log",
  "nix 0.31.3",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
  "windows-sys 0.61.2",
  "wintun-bindings",
 ]
